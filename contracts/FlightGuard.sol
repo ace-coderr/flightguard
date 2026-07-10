@@ -17,6 +17,14 @@ import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.s
 import { IWeb2Json } from "@flarenetwork/flare-periphery-contracts/coston2/IWeb2Json.sol";
 import { IFdcVerification } from "@flarenetwork/flare-periphery-contracts/coston2/IFdcVerification.sol";
 
+// Mirrors the single "dto" tuple declared by the request's abiSignature - abiEncodedData
+// is the ABI encoding of ONE tuple-typed value, not two flat top-level params, so it must
+// be decoded as this struct (same pattern as weatherInsurance's DataTransportObject).
+struct FlightDto {
+    string flightStatus;
+    uint256 delayMinutes;
+}
+
 contract FlightGuard {
     using SafeERC20 for IERC20;
 
@@ -48,7 +56,7 @@ contract FlightGuard {
         uint256 coverAmount;
         uint256 premium;
         uint64 scheduledArrival; // unix ts
-        bytes32 requestHash; // keccak of expected FDC request (url+jq+abiSig)
+        bytes32 requestHash; // keccak of expected FDC request (url+headers+queryParams+jq+abiSig)
         Status status;
     }
 
@@ -108,9 +116,12 @@ contract FlightGuard {
     // ---------- traveler side ----------
 
     /**
-     * requestHash = keccak256(abi.encode(url, postProcessJq, abiSignature))
+     * requestHash = keccak256(abi.encode(url, headers, queryParams, postProcessJq, abiSignature))
      * computed off-chain from the exact FDC request that will settle this flight.
-     * Prevents settling policy A with a proof about flight B.
+     * Prevents settling policy A with a proof about flight B. headers/queryParams are part
+     * of the hash because the flight identity (e.g. flight_iata) can live in either the url
+     * or queryParams depending on the API - omitting queryParams lets a proof about a
+     * different flight settle any policy that shares the same url/jq/abiSignature.
      */
     function buyCover(
         uint256 coverAmount,
@@ -143,7 +154,7 @@ contract FlightGuard {
 
     /**
      * Anyone can settle with a valid FDC proof after scheduled arrival.
-     * abiSignature expected: (string flightStatus, uint256 delayMinutes)
+     * abiSignature expected: a single "dto" tuple matching FlightDto (string flightStatus, uint256 delayMinutes).
      */
     function settle(uint256 policyId, IWeb2Json.Proof calldata proof) external {
         Policy storage p = policies[policyId];
@@ -158,6 +169,8 @@ contract FlightGuard {
         bytes32 h = keccak256(
             abi.encode(
                 proof.data.requestBody.url,
+                proof.data.requestBody.headers,
+                proof.data.requestBody.queryParams,
                 proof.data.requestBody.postProcessJq,
                 proof.data.requestBody.abiSignature
             )
@@ -165,13 +178,10 @@ contract FlightGuard {
         require(h == p.requestHash, "proof/policy mismatch");
 
         // 3. decode attested API data
-        (string memory flightStatus, uint256 delayMinutes) = abi.decode(
-            proof.data.responseBody.abiEncodedData,
-            (string, uint256)
-        );
+        FlightDto memory dto = abi.decode(proof.data.responseBody.abiEncodedData, (FlightDto));
 
-        bool cancelled = keccak256(bytes(flightStatus)) == keccak256(bytes("cancelled"));
-        bool delayed = delayMinutes >= DELAY_THRESHOLD_MIN;
+        bool cancelled = keccak256(bytes(dto.flightStatus)) == keccak256(bytes("cancelled"));
+        bool delayed = dto.delayMinutes >= DELAY_THRESHOLD_MIN;
 
         totalLocked -= p.coverAmount;
 
@@ -181,7 +191,7 @@ contract FlightGuard {
         } else {
             p.status = Status.NoPayout; // premium stays in pool
         }
-        emit Settled(policyId, p.status, delayMinutes, cancelled);
+        emit Settled(policyId, p.status, dto.delayMinutes, cancelled);
     }
 
     /** After claim window with no settlement, unlock funds back to pool. */

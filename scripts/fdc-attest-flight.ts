@@ -66,12 +66,27 @@ export function buildFlightRequestBody(flightIataCode: string, date: string, api
 }
 
 // requestHash used by FlightGuard.buyCover/settle:
-// keccak256(abi.encode(url, postProcessJq, abiSignature))
-export function computeRequestHash(requestBody: { url: string; postProcessJq: string; abiSignature: string }) {
+// keccak256(abi.encode(url, headers, queryParams, postProcessJq, abiSignature))
+// headers/queryParams are included because the flight identity (flight_iata) lives in
+// queryParams for this API - without it, a proof for a different flight but the same
+// url/jq/abiSignature would still match this policy's requestHash.
+export function computeRequestHash(requestBody: {
+    url: string;
+    headers: string;
+    queryParams: string;
+    postProcessJq: string;
+    abiSignature: string;
+}) {
     return ethers.keccak256(
         ethers.AbiCoder.defaultAbiCoder().encode(
-            ["string", "string", "string"],
-            [requestBody.url, requestBody.postProcessJq, requestBody.abiSignature]
+            ["string", "string", "string", "string", "string"],
+            [
+                requestBody.url,
+                requestBody.headers,
+                requestBody.queryParams,
+                requestBody.postProcessJq,
+                requestBody.abiSignature,
+            ]
         )
     );
 }
@@ -101,12 +116,14 @@ function decodeProof(proof: any) {
     const decodedResponse: any = web3.eth.abi.decodeParameter(responseType, proof.response_hex);
     console.log("Decoded response:", decodedResponse, "\n");
 
-    const decodedDto = web3.eth.abi.decodeParameters(
-        ["string", "uint256"],
-        decodedResponse.responseBody.abiEncodedData
-    );
-    const flightStatus: string = decodedDto[0];
-    const delayMinutes: string = decodedDto[1];
+    // abiSignature declares ONE top-level "dto" tuple param, not two flat params, so
+    // abiEncodedData must be decoded as that single (dynamic) tuple type - decoding it
+    // as flat (string, uint256) reads the tuple's outer offset word as the string offset
+    // and silently produces garbage.
+    const dtoType = JSON.parse(abiSignature);
+    const decodedDto: any = web3.eth.abi.decodeParameter(dtoType, decodedResponse.responseBody.abiEncodedData);
+    const flightStatus: string = decodedDto.flightStatus;
+    const delayMinutes: string = decodedDto.delayMinutes;
     console.log(`Flight status: ${flightStatus}, delay: ${delayMinutes} min\n`);
 
     return {
@@ -141,9 +158,14 @@ async function main() {
     console.log("Attestation complete. Proof ready for FlightGuard.settle(policyId, proof):\n", settleProof, "\n");
 }
 
-void main().then(() => {
-    process.exit(0);
-});
+// Guard direct execution only: hardhat forks each `hardhat run` script as its own
+// process entry point (so this is true then), but demo.ts imports buildFlightRequestBody
+// / computeRequestHash from this file and must not trigger this file's own main().
+if (require.main === module) {
+    void main().then(() => {
+        process.exit(0);
+    });
+}
 
 /*
  * NOTES / RISKS:
