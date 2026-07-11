@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { parseUnits } from "viem";
+import { formatUnits, parseUnits } from "viem";
 import { useAccount, useReadContract, useWaitForTransactionReceipt, useWriteContract } from "wagmi";
 import { flightGuardConfig, usdt0Config, USDT0_DECIMALS } from "@/lib/contracts";
 import { formatAmount, formatShares } from "@/lib/format";
@@ -98,7 +98,14 @@ export default function PoolPage() {
     query: { enabled: Boolean(depositHash) },
   });
 
-  const [withdrawShares, setWithdrawShares] = useState("");
+  const [withdrawInput, setWithdrawInput] = useState("");
+  const withdrawShareAmount = useMemo(() => {
+    try {
+      return parseUnits(withdrawInput || "0", USDT0_DECIMALS);
+    } catch {
+      return 0n;
+    }
+  }, [withdrawInput]);
   const { writeContract: writeWithdraw, data: withdrawHash, isPending: isWithdrawPending, error: withdrawError } =
     useWriteContract();
   const { isLoading: isWithdrawConfirming } = useWaitForTransactionReceipt({
@@ -128,18 +135,12 @@ export default function PoolPage() {
   }
 
   function handleWithdraw() {
-    let shareAmount: bigint;
-    try {
-      shareAmount = BigInt(withdrawShares || "0");
-    } catch {
-      return;
-    }
-    if (shareAmount <= 0n) return;
+    if (withdrawShareAmount <= 0n) return;
     writeWithdraw(
-      { ...flightGuardConfig, functionName: "withdraw", args: [shareAmount] },
+      { ...flightGuardConfig, functionName: "withdraw", args: [withdrawShareAmount] },
       {
         onSuccess: () => {
-          setWithdrawShares("");
+          setWithdrawInput("");
           setTimeout(refetchAll, 2000);
         },
       }
@@ -246,15 +247,15 @@ export default function PoolPage() {
               <input
                 type="number"
                 min="0"
-                step="1"
+                step="0.01"
                 placeholder="Shares to withdraw"
-                value={withdrawShares}
-                onChange={(e) => setWithdrawShares(e.target.value)}
+                value={withdrawInput}
+                onChange={(e) => setWithdrawInput(e.target.value)}
                 className={`flex-1 ${inputClass}`}
               />
               <button
                 type="button"
-                onClick={() => setWithdrawShares(((userShares as bigint) ?? 0n).toString())}
+                onClick={() => setWithdrawInput(formatUnits((userShares as bigint) ?? 0n, USDT0_DECIMALS))}
                 className="rounded-lg border border-ink/15 px-3 py-2 text-sm text-muted transition-colors hover:border-ink/30 hover:text-ink"
               >
                 Max
@@ -262,7 +263,7 @@ export default function PoolPage() {
             </div>
             <button
               onClick={handleWithdraw}
-              disabled={!withdrawShares || isWithdrawPending || isWithdrawConfirming}
+              disabled={withdrawShareAmount <= 0n || isWithdrawPending || isWithdrawConfirming}
               className={primaryButtonClass}
             >
               {isWithdrawPending || isWithdrawConfirming ? "Withdrawing..." : "Withdraw"}
