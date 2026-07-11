@@ -1,13 +1,13 @@
-import { buildFlightRequestBody, computeRequestHash, validateFlightInput } from "./flightRequest";
+import { resolveFlightRequestBody, validateFlightInput } from "./flightRequest";
 import {
-  buildSettleProof,
-  getPublicClient,
-  getSettlerWalletClient,
-  isRoundFinalized,
-  prepareWeb2JsonRequest,
-  submitAttestationRequest,
-  tryFetchProof,
-  type SettleProof,
+    buildSettleProof,
+    getPublicClient,
+    getSettlerWalletClient,
+    isRoundFinalized,
+    prepareWeb2JsonRequest,
+    submitAttestationRequest,
+    tryFetchProof,
+    type SettleProof,
 } from "./fdc";
 
 /**
@@ -22,63 +22,69 @@ import {
 export type SettlePhase = "submitted" | "waiting_finalization" | "fetching_proof" | "ready" | "failed";
 
 export type StartSettleResult = {
-  jobId: string;
-  flightIata: string;
-  date: string;
-  roundId: number;
-  abiEncodedRequest: `0x${string}`;
+    jobId: string;
+    flightIata: string;
+    date: string;
+    roundId: number;
+    abiEncodedRequest: `0x${string}`;
 };
 
 // Cosmetic/debug label only — (roundId, abiEncodedRequest) are the real reconstruction
 // key and travel with every status call, since abiEncodedRequest bakes in a
 // messageIntegrityCode from the live API fetch at prepare time and can't be re-derived.
 function deterministicJobId(flightIata: string, date: string, roundId: number): string {
-  return `${flightIata}_${date}_${roundId}`;
+    return `${flightIata}_${date}_${roundId}`;
 }
 
-export async function startSettleJob(flightIataInput: string, dateInput: string): Promise<StartSettleResult> {
-  const { flightIata, date } = validateFlightInput(flightIataInput, dateInput);
+export async function startSettleJob(
+    flightIataInput: string,
+    dateInput: string,
+    expectedRequestHash: `0x${string}`
+): Promise<StartSettleResult> {
+    const { flightIata, date } = validateFlightInput(flightIataInput, dateInput);
 
-  const apiKey = process.env.FLIGHT_API_KEY;
-  if (!apiKey) throw new Error("Server is missing FLIGHT_API_KEY");
+    const apiKey = process.env.FLIGHT_API_KEY;
+    if (!apiKey) throw new Error("Server is missing FLIGHT_API_KEY");
 
-  // Same builder as /api/flight-request, so this produces byte-for-byte the same
-  // requestBody (and therefore requestHash) as the one the policy was bought against.
-  const requestBody = buildFlightRequestBody(flightIata, date, apiKey);
-  computeRequestHash(requestBody); // sanity: throws if requestBody is malformed
+    // Tries the current proxy-based scheme first, falling back to the legacy direct-airlabs
+    // scheme so policies bought before the flight-proxy existed can still be settled.
+    const resolved = resolveFlightRequestBody(flightIata, date, expectedRequestHash, apiKey);
+    if (!resolved) {
+        throw new Error("requestHash matches neither the current nor legacy request scheme");
+    }
 
-  const abiEncodedRequest = await prepareWeb2JsonRequest(requestBody);
+    const abiEncodedRequest = await prepareWeb2JsonRequest(resolved.requestBody);
 
-  const publicClient = getPublicClient();
-  const walletClient = getSettlerWalletClient();
-  const { roundId } = await submitAttestationRequest(publicClient, walletClient, abiEncodedRequest);
+    const publicClient = getPublicClient();
+    const walletClient = getSettlerWalletClient();
+    const { roundId } = await submitAttestationRequest(publicClient, walletClient, abiEncodedRequest);
 
-  return { jobId: deterministicJobId(flightIata, date, roundId), flightIata, date, roundId, abiEncodedRequest };
+    return { jobId: deterministicJobId(flightIata, date, roundId), flightIata, date, roundId, abiEncodedRequest };
 }
 
 export type SettleStatusResult = {
-  phase: SettlePhase;
-  roundId: number;
-  proof?: SettleProof;
+    phase: SettlePhase;
+    roundId: number;
+    proof?: SettleProof;
 };
 
 /** Advances by exactly one step: check finalization, then (if finalized) try once for the
  * DA proof. No internal sleeps — callers re-invoke this every ~5s until phase is terminal. */
 export async function getSettleStatus(roundId: number, abiEncodedRequest: `0x${string}`): Promise<SettleStatusResult> {
-  const daLayerUrl = process.env.COSTON2_DA_LAYER_URL;
-  if (!daLayerUrl) throw new Error("Server is missing COSTON2_DA_LAYER_URL");
+    const daLayerUrl = process.env.COSTON2_DA_LAYER_URL;
+    if (!daLayerUrl) throw new Error("Server is missing COSTON2_DA_LAYER_URL");
 
-  const publicClient = getPublicClient();
+    const publicClient = getPublicClient();
 
-  const finalized = await isRoundFinalized(publicClient, roundId);
-  if (!finalized) {
-    return { phase: "waiting_finalization", roundId };
-  }
+    const finalized = await isRoundFinalized(publicClient, roundId);
+    if (!finalized) {
+        return { phase: "waiting_finalization", roundId };
+    }
 
-  const daProof = await tryFetchProof(daLayerUrl, abiEncodedRequest, roundId);
-  if (!daProof) {
-    return { phase: "fetching_proof", roundId };
-  }
+    const daProof = await tryFetchProof(daLayerUrl, abiEncodedRequest, roundId);
+    if (!daProof) {
+        return { phase: "fetching_proof", roundId };
+    }
 
-  return { phase: "ready", roundId, proof: buildSettleProof(daProof) };
+    return { phase: "ready", roundId, proof: buildSettleProof(daProof) };
 }

@@ -217,7 +217,7 @@ export function PolicyRow({ policy, rowGridClass, onSettled }: { policy: Policy;
       const res = await fetch("/api/settle/start", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ flightIata, date }),
+        body: JSON.stringify({ flightIata, date, requestHash: policy.requestHash }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Failed to start settlement");

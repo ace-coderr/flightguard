@@ -15,7 +15,7 @@ const MockUSDT0 = artifacts.require("MockUSDT0");
 // Full happy path: deposit -> buyCover -> FDC attestation cycle -> settle.
 // Needs scripts/flightguard/config.ts, which is written by deploy.ts - run that first.
 
-const { VERIFIER_URL_TESTNET, VERIFIER_API_KEY_TESTNET, COSTON2_DA_LAYER_URL, FLIGHT_API_KEY } = process.env;
+const { VERIFIER_URL_TESTNET, VERIFIER_API_KEY_TESTNET, COSTON2_DA_LAYER_URL } = process.env;
 
 // EDIT ME: flight to attest. IATA flight number + YYYY-MM-DD date (must be today on free plan).
 const flightIata = "BA75";
@@ -68,10 +68,6 @@ async function logPoolState(flightGuard: FlightGuardInstance, label: string) {
 }
 
 async function main() {
-    if (!FLIGHT_API_KEY) {
-        throw new Error("FLIGHT_API_KEY not set in .env");
-    }
-
     const [account] = await web3.eth.getAccounts();
     const flightGuard: FlightGuardInstance = await FlightGuard.at(flightGuardAddress);
     const token: MockUSDT0Instance = await MockUSDT0.at(usdt0Address);
@@ -91,7 +87,7 @@ async function main() {
     await logPoolState(flightGuard, "after deposit");
 
     // 2. Traveler: buy cover for the flight
-    const requestBody = buildFlightRequestBody(flightIata, flightDate, FLIGHT_API_KEY);
+    const requestBody = buildFlightRequestBody(flightIata, flightDate);
     const requestHash = computeRequestHash(requestBody);
     console.log("Request hash:", requestHash, "\n");
 

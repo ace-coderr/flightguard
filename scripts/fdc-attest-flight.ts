@@ -17,10 +17,11 @@ import {
  *  4. Fetch proof from DA layer: POST /api/v1/fdc/proof-by-request-round-raw
  *
  * Env needed: COSTON2_RPC_URL, PRIVATE_KEY, VERIFIER_URL_TESTNET, VERIFIER_API_KEY_TESTNET,
- * COSTON2_DA_LAYER_URL, FLIGHT_API_KEY
+ * COSTON2_DA_LAYER_URL, NEXT_PUBLIC_APP_URL (FLIGHT_API_KEY is only needed by the deployed
+ * flight-proxy this script attests, not by this script itself)
  */
 
-const { VERIFIER_URL_TESTNET, VERIFIER_API_KEY_TESTNET, COSTON2_DA_LAYER_URL, FLIGHT_API_KEY } = process.env;
+const { VERIFIER_URL_TESTNET, VERIFIER_API_KEY_TESTNET, COSTON2_DA_LAYER_URL, NEXT_PUBLIC_APP_URL } = process.env;
 
 // yarn hardhat run scripts/fdc-attest-flight.ts --network coston2
 
@@ -55,9 +56,34 @@ function buildPostProcessJq(date: string) {
     return `(.response.dep_time_utc // "" | startswith("${date}")) as $match | {flightStatus: (if $match then (.response.status // .error.message // "EMPTY") else "EMPTY" end), delayMinutes: (if $match then (.response.arr_delayed // 0) else 0 end)}`;
 }
 
+function proxyBaseUrl(): string {
+    if (!NEXT_PUBLIC_APP_URL) throw new Error("NEXT_PUBLIC_APP_URL not set in .env");
+    return NEXT_PUBLIC_APP_URL.replace(/\/$/, "");
+}
+
 // The exact request we attest. IMPORTANT: this same (url, postProcessJq, abiSignature)
 // tuple is hashed into requestHash at buyCover time.
-export function buildFlightRequestBody(flightIataCode: string, date: string, apiKey: string) {
+// Attests our own GET /api/flight-proxy (see web/app/api/flight-proxy/route.ts) instead
+// of airlabs.co directly, so no api_key ever appears in FDC calldata - the proxy holds it
+// server-side. MUST stay byte-for-byte identical to
+// web/lib/server/flightRequest.ts's buildFlightRequestBody.
+export function buildFlightRequestBody(flightIataCode: string, date: string) {
+    return {
+        url: `${proxyBaseUrl()}/api/flight-proxy`,
+        httpMethod,
+        headers,
+        queryParams: JSON.stringify({ flight_iata: flightIataCode, date }),
+        body,
+        postProcessJq: buildPostProcessJq(date),
+        abiSignature,
+    };
+}
+
+// Pre-proxy request scheme (api_key in queryParams, hitting airlabs.co directly). Kept
+// only so the keeper/settle flow can still attest+settle policies bought before the
+// flight-proxy existed. MUST stay byte-for-byte identical to
+// web/lib/server/flightRequest.ts's buildLegacyFlightRequestBody.
+export function buildLegacyFlightRequestBody(flightIataCode: string, date: string, apiKey: string) {
     return {
         url: `https://airlabs.co/api/v9/flight`,
         httpMethod,
@@ -138,11 +164,8 @@ function decodeProof(proof: any) {
 }
 
 async function main() {
-    if (!FLIGHT_API_KEY) {
-        throw new Error("FLIGHT_API_KEY not set in .env");
-    }
-
-    const requestBody = buildFlightRequestBody(flightIata, flightDate, FLIGHT_API_KEY);
+    const requestBody = buildFlightRequestBody(flightIata, flightDate);
+    console.log("Attesting via proxy:", requestBody.url, "\n");
     console.log("Request hash (for buyCover):", computeRequestHash(requestBody), "\n");
 
     const data = await prepareAttestationRequest(requestBody);
@@ -179,6 +202,8 @@ if (require.main === module) {
  * - The jq date-lock uses dep_time_utc (scheduled departure, always present even for
  *   cancellations, and not shifted by overnight arrivals landing on the next UTC date)
  *   so the same requestHash computed at buyCover time still matches at settle time.
- * - API key in URL is visible in the attested request onchain. Fine for demo;
- *   note it in README as known limitation + roadmap item.
+ * - Requests are attested via our own GET /api/flight-proxy, not airlabs.co directly, so
+ *   FLIGHT_API_KEY never appears in the attested request's queryParams / onchain calldata.
+ *   Policies bought before this existed still settle via buildLegacyFlightRequestBody
+ *   (see keeper.ts / settle.ts's resolveFlightRequestBody fallback).
  */
