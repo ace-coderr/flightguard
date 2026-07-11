@@ -1,10 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 import { useWaitForTransactionReceipt, useWriteContract } from "wagmi";
 import { flightGuardConfig, POLICY_STATUS_LABEL, PolicyStatus } from "@/lib/contracts";
-import { formatAmount, formatDate } from "@/lib/format";
+import { formatAmount, formatDate, parsePolicyFlightRef } from "@/lib/format";
 
 export type Policy = {
   id: number;
@@ -16,13 +17,6 @@ export type Policy = {
   flightRef: string;
   status: PolicyStatus;
 };
-
-/** "BA75|2026-07-11" -> { flightIata, date } — tolerant of malformed data since it's
- *  purely for display; the keeper does its own strict parsing server-side. */
-function parsePolicyFlightRef(flightRef: string): { flightIata: string; date: string } | null {
-  const [flightIata, date] = flightRef.split("|");
-  return flightIata && date ? { flightIata, date } : null;
-}
 
 type SettlePhase = "submitted" | "waiting_finalization" | "fetching_proof" | "ready" | "failed";
 
@@ -258,9 +252,12 @@ export function PolicyRow({ policy, rowGridClass, onSettled }: { policy: Policy;
   return (
     <div className="flex flex-col gap-4 rounded-2xl border border-ink/10 bg-white px-6 py-5 text-sm">
       <div className={`grid grid-cols-2 gap-x-4 gap-y-2 md:items-center ${rowGridClass}`}>
-        <span className="col-span-2 font-semibold md:col-span-1">
+        <Link
+          href={`/policy/${policy.id}`}
+          className="col-span-2 font-semibold underline-offset-4 hover:underline md:col-span-1"
+        >
           {meta ? `${meta.flightIata} · ${meta.date}` : `Policy #${policy.id}`}
-        </span>
+        </Link>
         <span className="font-mono">{formatAmount(policy.coverAmount)} USDT0</span>
         <span className="font-mono">{formatAmount(policy.premium)} USDT0</span>
         <span className="font-mono text-muted">{formatDate(policy.scheduledArrival)}</span>

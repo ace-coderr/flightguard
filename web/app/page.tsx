@@ -210,11 +210,12 @@ export default function Home() {
                 rounds, real Merkle proofs.
               </p>
             </div>
-            <ExplorerLink
-              address={flightGuardAddress}
-              label="0xd589...14E4B"
-              className="inline-flex shrink-0 rounded-full bg-ink px-5 py-3 text-sm"
-            />
+            <Link
+              href="/policy/0"
+              className="inline-flex shrink-0 rounded-full bg-ink px-5 py-3 text-sm font-semibold text-white transition-colors hover:bg-ink/80"
+            >
+              View policy #0&apos;s receipt →
+            </Link>
           </div>
         </div>
       </section>

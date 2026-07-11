@@ -34,3 +34,10 @@ export function formatUtcTime(timeUtc: string): string {
   const time = timeUtc.split(" ")[1];
   return time ? `${time} UTC` : timeUtc;
 }
+
+/** "BA75|2026-07-11" -> { flightIata, date } — tolerant of malformed data since it's
+ *  purely for display; the keeper does its own strict parsing server-side. */
+export function parsePolicyFlightRef(flightRef: string): { flightIata: string; date: string } | null {
+  const [flightIata, date] = flightRef.split("|");
+  return flightIata && date ? { flightIata, date } : null;
+}
