@@ -16,6 +16,8 @@ function buildPostProcessJq() {
   return `{flightStatus: (.response.status // .error.message // "EMPTY"), delayMinutes: (.response.arr_delayed // 0)}`;
 }
 
+export type FlightRequestBody = ReturnType<typeof buildFlightRequestBody>;
+
 export function buildFlightRequestBody(flightIata: string, apiKey: string) {
   return {
     url: `https://airlabs.co/api/v9/flight`,

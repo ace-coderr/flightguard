@@ -3,36 +3,11 @@
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useAccount, usePublicClient, useReadContract } from "wagmi";
-import { flightGuardConfig, POLICY_STATUS_LABEL, PolicyStatus } from "@/lib/contracts";
-import { formatAmount, formatDate } from "@/lib/format";
-import { getPolicyMeta } from "@/lib/policyMeta";
-
-type Policy = {
-  id: number;
-  holder: string;
-  coverAmount: bigint;
-  premium: bigint;
-  scheduledArrival: number;
-  requestHash: `0x${string}`;
-  status: PolicyStatus;
-};
+import { flightGuardConfig, PolicyStatus } from "@/lib/contracts";
+import { formatAmount } from "@/lib/format";
+import { PolicyRow, type Policy } from "@/components/PolicyRow";
 
 const ROW_GRID = "md:grid-cols-[1.4fr_1fr_1fr_1.4fr_0.6fr_auto]";
-
-const STATUS_STYLE: Record<PolicyStatus, string> = {
-  [PolicyStatus.Active]: "bg-ink text-white",
-  [PolicyStatus.PaidOut]: "bg-brand text-white",
-  [PolicyStatus.Expired]: "bg-ink/10 text-muted",
-  [PolicyStatus.NoPayout]: "bg-ink/10 text-muted",
-};
-
-function StatusChip({ status }: { status: PolicyStatus }) {
-  return (
-    <span className={`rounded-full px-2.5 py-1 font-mono text-xs font-semibold uppercase tracking-wide ${STATUS_STYLE[status]}`}>
-      {POLICY_STATUS_LABEL[status]}
-    </span>
-  );
-}
 
 export default function PoliciesPage() {
   const { address, isConnected } = useAccount();
@@ -47,6 +22,7 @@ export default function PoliciesPage() {
     data: policies,
     isLoading,
     error,
+    refetch,
   } = useQuery({
     queryKey: ["policies", address, policyCount?.toString()],
     queryFn: async () => {
@@ -161,26 +137,9 @@ export default function PoliciesPage() {
             <span>ID</span>
             <span className="text-right">Status</span>
           </div>
-          {policies.map((policy) => {
-            const meta = getPolicyMeta(policy.requestHash);
-            return (
-              <div
-                key={policy.id}
-                className={`grid grid-cols-2 gap-x-4 gap-y-2 rounded-2xl border border-ink/10 bg-white px-6 py-5 text-sm md:items-center ${ROW_GRID}`}
-              >
-                <span className="col-span-2 font-semibold md:col-span-1">
-                  {meta ? `${meta.flightIata} · ${meta.date}` : `Policy #${policy.id}`}
-                </span>
-                <span className="font-mono">{formatAmount(policy.coverAmount)} USDT0</span>
-                <span className="font-mono">{formatAmount(policy.premium)} USDT0</span>
-                <span className="font-mono text-muted">{formatDate(policy.scheduledArrival)}</span>
-                <span className="font-mono text-muted">#{policy.id}</span>
-                <span className="md:text-right">
-                  <StatusChip status={policy.status} />
-                </span>
-              </div>
-            );
-          })}
+          {policies.map((policy) => (
+            <PolicyRow key={policy.id} policy={policy} rowGridClass={ROW_GRID} onSettled={() => refetch()} />
+          ))}
         </div>
       )}
     </div>
