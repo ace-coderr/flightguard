@@ -5,10 +5,13 @@ import { validateFlightInput } from "@/lib/server/flightRequest";
  * Public, unauthenticated pass-through to airlabs.co/v9/flight - this is the URL
  * scripts/fdc-attest-flight.ts / web/lib/server/flightRequest.ts attest via FDC's
  * Web2Json attestation type, so an FDC verifier node (not our own frontend) must be able
- * to reach it with no credentials. Its only job is to keep FLIGHT_API_KEY out of the
- * attested request's queryParams (and therefore off-chain-visible calldata) while
- * returning byte-for-byte the same {response: {...}}/{error: {...}} shape airlabs.co
- * itself returns, so postProcessJq (see buildPostProcessJq) doesn't need to change.
+ * to reach it with no credentials. Its job is to keep FLIGHT_API_KEY out of the attested
+ * request's queryParams (and therefore off-chain-visible calldata) while returning the
+ * same {response: {...}}/{error: {...}} shape airlabs.co itself returns, so
+ * postProcessJq (see buildPostProcessJq) doesn't need to change. Everything else in
+ * airlabs' payload is dropped (see stripUpstreamSecrets) - notably `.request.key.api_key`,
+ * which airlabs echoes back in its own response and would otherwise leak our key to
+ * anyone calling this public endpoint.
  */
 
 const RATE_LIMIT_WINDOW_MS = 60_000;
@@ -39,6 +42,18 @@ function hasExpectedShape(json: unknown): boolean {
     if (!json || typeof json !== "object") return false;
     const j = json as Record<string, unknown>;
     return typeof j.response === "object" || typeof j.error === "object";
+}
+
+// airlabs echoes the request it received - including api_key - back under `.request` in
+// its own response body (see `.request.key.api_key`). postProcessJq never reads that
+// field, but this route is public/unauthenticated, so passing it through verbatim would
+// hand FLIGHT_API_KEY to anyone who calls this endpoint. Only forward what postProcessJq
+// actually reads (`.response.*`, `.error.message`).
+function stripUpstreamSecrets(json: Record<string, unknown>) {
+    const out: Record<string, unknown> = {};
+    if (typeof json.response === "object") out.response = json.response;
+    if (typeof json.error === "object") out.error = json.error;
+    return out;
 }
 
 export async function GET(req: NextRequest) {
@@ -85,5 +100,5 @@ export async function GET(req: NextRequest) {
         return NextResponse.json({ error: "Unexpected upstream response shape" }, { status: 502 });
     }
 
-    return NextResponse.json(json, { status: upstream.status });
+    return NextResponse.json(stripUpstreamSecrets(json as Record<string, unknown>), { status: upstream.status });
 }
