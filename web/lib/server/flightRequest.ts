@@ -18,8 +18,14 @@ const abiSignature = `{"components":[{"internalType":"string","name":"flightStat
 // would never match a lock keyed on the departure date. If the attested response is about
 // a different day's occurrence of this flight number, this degrades to a fixed "EMPTY"/0
 // output (never a payout) instead of failing the attestation outright.
+//
+// The date-check is duplicated into both fields rather than bound once via
+// `EXPR as $match | ...`: the FDC Web2Json verifier's jq engine rejects `as $var` variable
+// bindings outright (confirmed live against the testnet verifier - it returns "INVALID:
+// INVALID JQ FILTER" for that syntax specifically, independent of the rest of the filter).
 function buildPostProcessJq(date: string) {
-    return `(.response.dep_time_utc // "" | startswith("${date}")) as $match | {flightStatus: (if $match then (.response.status // .error.message // "EMPTY") else "EMPTY" end), delayMinutes: (if $match then (.response.arr_delayed // 0) else 0 end)}`;
+    const matched = `(.response.dep_time_utc // "" | startswith("${date}"))`;
+    return `{flightStatus: (if ${matched} then (.response.status // .error.message // "EMPTY") else "EMPTY" end), delayMinutes: (if ${matched} then (.response.arr_delayed // 0) else 0 end)}`;
 }
 
 export type FlightRequestBody = ReturnType<typeof buildFlightRequestBody>;

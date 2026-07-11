@@ -27,7 +27,7 @@ const { VERIFIER_URL_TESTNET, VERIFIER_API_KEY_TESTNET, COSTON2_DA_LAYER_URL, NE
 
 // EDIT ME: flight to attest. IATA flight number + YYYY-MM-DD date (must be today on free plan).
 const flightIata = "BA75";
-const flightDate = "2026-07-09";
+const flightDate = "2026-07-11";
 
 const httpMethod = "GET";
 // Defaults to "Content-Type": "application/json"
@@ -52,8 +52,14 @@ const verifierUrlBase = VERIFIER_URL_TESTNET;
 // a different day's occurrence of this flight number, this degrades to a fixed "EMPTY"/0
 // output (never a payout) instead of failing the attestation outright.
 // MUST stay byte-for-byte identical to web/lib/server/flightRequest.ts's buildPostProcessJq.
+//
+// The date-check is duplicated into both fields rather than bound once via
+// `EXPR as $match | ...`: the FDC Web2Json verifier's jq engine rejects `as $var` variable
+// bindings outright (confirmed live against the testnet verifier - it returns "INVALID:
+// INVALID JQ FILTER" for that syntax specifically, independent of the rest of the filter).
 function buildPostProcessJq(date: string) {
-    return `(.response.dep_time_utc // "" | startswith("${date}")) as $match | {flightStatus: (if $match then (.response.status // .error.message // "EMPTY") else "EMPTY" end), delayMinutes: (if $match then (.response.arr_delayed // 0) else 0 end)}`;
+    const matched = `(.response.dep_time_utc // "" | startswith("${date}"))`;
+    return `{flightStatus: (if ${matched} then (.response.status // .error.message // "EMPTY") else "EMPTY" end), delayMinutes: (if ${matched} then (.response.arr_delayed // 0) else 0 end)}`;
 }
 
 function proxyBaseUrl(): string {

@@ -10,7 +10,7 @@ const REQUEST = {
     url: "https://airlabs.co/api/v9/flight",
     headers: "{}",
     queryParams: JSON.stringify({ flight_iata: "BA75" }),
-    postProcessJq: `(.response.dep_time_utc // "" | startswith("2026-07-10")) as $match | {flightStatus: (if $match then (.response.status // .error.message // "EMPTY") else "EMPTY" end), delayMinutes: (if $match then (.response.arr_delayed // 0) else 0 end)}`,
+    postProcessJq: `{flightStatus: (if (.response.dep_time_utc // "" | startswith("2026-07-10")) then (.response.status // .error.message // "EMPTY") else "EMPTY" end), delayMinutes: (if (.response.dep_time_utc // "" | startswith("2026-07-10")) then (.response.arr_delayed // 0) else 0 end)}`,
     abiSignature: `{"components":[{"internalType":"string","name":"flightStatus","type":"string"},{"internalType":"uint256","name":"delayMinutes","type":"uint256"}],"name":"dto","type":"tuple"}`,
 };
 
@@ -186,9 +186,7 @@ describe("FlightGuard", () => {
             const scheduledArrival = (await time.latest()) + 3600;
             const requestHash = computeRequestHash();
 
-            await expect(
-                flightGuard.connect(traveler).buyCover(coverAmount, scheduledArrival, requestHash, FLIGHT_REF)
-            )
+            await expect(flightGuard.connect(traveler).buyCover(coverAmount, scheduledArrival, requestHash, FLIGHT_REF))
                 .to.emit(flightGuard, "CoverBought")
                 .withArgs(0n, traveler.address, coverAmount, premium, requestHash, FLIGHT_REF);
 
@@ -211,9 +209,7 @@ describe("FlightGuard", () => {
             const requestHash = computeRequestHash();
             const flightRef = "KL1631|2026-08-01";
 
-            await expect(
-                flightGuard.connect(traveler).buyCover(coverAmount, scheduledArrival, requestHash, flightRef)
-            )
+            await expect(flightGuard.connect(traveler).buyCover(coverAmount, scheduledArrival, requestHash, flightRef))
                 .to.emit(flightGuard, "CoverBought")
                 .withArgs(0n, traveler.address, coverAmount, premium, requestHash, flightRef);
 
@@ -236,7 +232,9 @@ describe("FlightGuard", () => {
             await flightGuard.connect(backer).deposit(maxCover * 2n);
             const scheduledArrival = (await time.latest()) + 3600;
             await expect(
-                flightGuard.connect(traveler).buyCover(maxCover + 1n, scheduledArrival, computeRequestHash(), FLIGHT_REF)
+                flightGuard
+                    .connect(traveler)
+                    .buyCover(maxCover + 1n, scheduledArrival, computeRequestHash(), FLIGHT_REF)
             ).to.be.revertedWith("cover out of range");
         });
 
