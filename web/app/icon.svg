@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <rect width="512" height="512" rx="112" fill="#0A0C10"/>
+  <!-- shield outline -->
+  <path d="M256 96 L392 146 L392 268 C392 344 332 400 256 424 C180 400 120 344 120 268 L120 146 Z"
+        fill="none" stroke="#F4F4F2" stroke-width="20" stroke-linejoin="round"/>
+  <!-- dotted ascending flight path -->
+  <path d="M168 336 Q236 320 300 236"
+        fill="none" stroke="#F4F4F2" stroke-width="12" stroke-linecap="round"
+        stroke-dasharray="2 26" opacity="0.85"/>
+  <!-- plane glyph at mid-path -->
+  <g transform="translate(232 292) rotate(-38)">
+    <path d="M0 -26 L8 -6 L30 0 L8 6 L4 26 L0 16 L-4 26 L-8 6 L-30 0 L-8 -6 Z"
+          fill="#F4F4F2"/>
+  </g>
+  <!-- crimson destination dot -->
+  <circle cx="312" cy="222" r="26" fill="#E62058"/>
+  <circle cx="312" cy="222" r="40" fill="none" stroke="#E62058" stroke-width="6" opacity="0.4"/>
+</svg>
