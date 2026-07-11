@@ -58,6 +58,12 @@
         "internalType": "bytes32",
         "name": "requestHash",
         "type": "bytes32"
+      },
+      {
+        "indexed": false,
+        "internalType": "string",
+        "name": "flightRef",
+        "type": "string"
       }
     ],
     "name": "CoverBought",
@@ -212,6 +218,11 @@
         "internalType": "bytes32",
         "name": "requestHash",
         "type": "bytes32"
+      },
+      {
+        "internalType": "string",
+        "name": "flightRef",
+        "type": "string"
       }
     ],
     "name": "buyCover",
@@ -324,6 +335,11 @@
         "internalType": "bytes32",
         "name": "requestHash",
         "type": "bytes32"
+      },
+      {
+        "internalType": "string",
+        "name": "flightRef",
+        "type": "string"
       },
       {
         "internalType": "enum FlightGuard.Status",

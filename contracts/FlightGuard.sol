@@ -57,6 +57,7 @@ contract FlightGuard {
         uint256 premium;
         uint64 scheduledArrival; // unix ts
         bytes32 requestHash; // keccak of expected FDC request (url+headers+queryParams+jq+abiSig)
+        string flightRef; // "IATA|YYYY-MM-DD", lets a keeper rebuild the FDC request without offchain state
         Status status;
     }
 
@@ -69,7 +70,8 @@ contract FlightGuard {
         address indexed holder,
         uint256 coverAmount,
         uint256 premium,
-        bytes32 requestHash
+        bytes32 requestHash,
+        string flightRef
     );
     event Settled(uint256 indexed policyId, Status result, uint256 delayMinutes, bool cancelled);
 
@@ -126,7 +128,8 @@ contract FlightGuard {
     function buyCover(
         uint256 coverAmount,
         uint64 scheduledArrival,
-        bytes32 requestHash
+        bytes32 requestHash,
+        string calldata flightRef
     ) external returns (uint256 policyId) {
         require(coverAmount > 0 && coverAmount <= MAX_COVER, "cover out of range");
         require(scheduledArrival > block.timestamp, "flight in past");
@@ -143,11 +146,12 @@ contract FlightGuard {
                 premium: premium,
                 scheduledArrival: scheduledArrival,
                 requestHash: requestHash,
+                flightRef: flightRef,
                 status: Status.Active
             })
         );
         policyId = policies.length - 1;
-        emit CoverBought(policyId, msg.sender, coverAmount, premium, requestHash);
+        emit CoverBought(policyId, msg.sender, coverAmount, premium, requestHash, flightRef);
     }
 
     // ---------- settlement ----------

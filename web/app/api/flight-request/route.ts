@@ -1,8 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
+  buildFlightRef,
   buildFlightRequestBody,
   computeRequestHash,
-  scheduledArrivalForDate,
+  fetchFlight,
+  scheduledArrivalFromFlight,
+  utcDateOnly,
   validateFlightInput,
 } from "@/lib/server/flightRequest";
 
@@ -24,22 +27,51 @@ export async function POST(req: NextRequest) {
   }
 
   let flightIata: string;
-  let date: string;
   try {
-    ({ flightIata, date } = validateFlightInput(payload.flightIata, payload.date));
+    ({ flightIata } = validateFlightInput(payload.flightIata, payload.date));
   } catch (err) {
     return NextResponse.json({ error: (err as Error).message }, { status: 400 });
   }
 
-  const scheduledArrival = scheduledArrivalForDate(date);
-  if (scheduledArrival <= Math.floor(Date.now() / 1000)) {
-    return NextResponse.json({ error: "Flight date must be today or later" }, { status: 400 });
+  // Built server-side only: apiKey never leaves this handler, so it never reaches the
+  // client bundle or the browser network tab.
+  const flight = await fetchFlight(flightIata, apiKey);
+  if (!flight) {
+    return NextResponse.json(
+      { error: `Flight ${flightIata} not found. Check the flight number and try again.` },
+      { status: 404 }
+    );
   }
 
-  // Built server-side only: apiKey never leaves this handler, so it never reaches the
-  // client bundle or the browser network tab. Only the resulting hash is returned.
-  const requestBody = buildFlightRequestBody(flightIata, apiKey);
-  const requestHash = computeRequestHash(requestBody);
+  const scheduledArrival = scheduledArrivalFromFlight(flight);
+  if (scheduledArrival === null) {
+    return NextResponse.json(
+      { error: `${flightIata} has no scheduled arrival time yet. Try again closer to departure.` },
+      { status: 422 }
+    );
+  }
+  if (scheduledArrival <= Math.floor(Date.now() / 1000)) {
+    return NextResponse.json({ error: `${flightIata}'s scheduled arrival has already passed.` }, { status: 400 });
+  }
 
-  return NextResponse.json({ flightIata, date, scheduledArrival, requestHash });
+  // The date-lock and flightRef key off the flight's REAL departure date (from airlabs),
+  // not whatever the buyer typed - this is what the keeper's proof at settle time will
+  // also be checked against, so it must be the ground truth, not user input.
+  const date = utcDateOnly(flight.depTimeUtc);
+  const requestBody = buildFlightRequestBody(flightIata, date, apiKey);
+  const requestHash = computeRequestHash(requestBody);
+  const flightRef = buildFlightRef(flightIata, date);
+
+  return NextResponse.json({
+    flightIata,
+    date,
+    depIata: flight.depIata,
+    arrIata: flight.arrIata,
+    depTimeUtc: flight.depTimeUtc,
+    arrTimeUtc: flight.arrTimeUtc,
+    status: flight.status,
+    scheduledArrival,
+    requestHash,
+    flightRef,
+  });
 }

@@ -4,15 +4,19 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import { useAccount, useReadContract, useWaitForTransactionReceipt, useWriteContract } from "wagmi";
 import { parseUnits } from "viem";
 import { flightGuardConfig, usdt0Config, MAX_COVER, PREMIUM_BPS, USDT0_DECIMALS } from "@/lib/contracts";
-import { formatAmount, formatDate } from "@/lib/format";
-import { savePolicyMeta } from "@/lib/policyMeta";
+import { formatAmount, formatDate, formatUtcTime } from "@/lib/format";
 import { ExplorerLink } from "@/components/ExplorerLink";
 
 type Quote = {
   flightIata: string;
   date: string;
+  depIata: string | null;
+  arrIata: string | null;
+  arrTimeUtc: string | null;
+  status: string;
   scheduledArrival: number;
   requestHash: `0x${string}`;
+  flightRef: string;
   coverAmount: bigint;
   premium: bigint;
 };
@@ -96,8 +100,13 @@ export default function CoverPage() {
       setQuote({
         flightIata: data.flightIata,
         date: data.date,
+        depIata: data.depIata,
+        arrIata: data.arrIata,
+        arrTimeUtc: data.arrTimeUtc,
+        status: data.status,
         scheduledArrival: data.scheduledArrival,
         requestHash: data.requestHash,
+        flightRef: data.flightRef,
         coverAmount,
         premium,
       });
@@ -122,19 +131,13 @@ export default function CoverPage() {
     writeBuyCover({
       ...flightGuardConfig,
       functionName: "buyCover",
-      args: [quote.coverAmount, quote.scheduledArrival, quote.requestHash],
+      args: [quote.coverAmount, quote.scheduledArrival, quote.requestHash, quote.flightRef],
     });
   }
 
   useEffect(() => {
     if (isApproveConfirmed) refetchAllowance();
   }, [isApproveConfirmed, refetchAllowance]);
-
-  useEffect(() => {
-    if (isBuyCoverConfirmed && quote) {
-      savePolicyMeta(quote.requestHash, { flightIata: quote.flightIata, date: quote.date });
-    }
-  }, [isBuyCoverConfirmed, quote]);
 
   return (
     <div className="mx-auto max-w-6xl px-6 py-12">
@@ -231,6 +234,15 @@ export default function CoverPage() {
                 <span className="font-mono text-xs text-white/50">
                   {quote.flightIata} · {quote.date}
                 </span>
+              </div>
+
+              <div className="rounded-lg bg-white/5 px-3 py-2 font-mono text-sm">
+                {quote.flightIata}
+                {quote.depIata && quote.arrIata ? ` · ${quote.depIata}→${quote.arrIata}` : ""}
+                {quote.arrTimeUtc ? ` · arrives ${formatUtcTime(quote.arrTimeUtc)}` : ""}
+                <div className="mt-1 text-xs uppercase tracking-wide text-white/50">
+                  Confirm this is your flight before buying · status: {quote.status}
+                </div>
               </div>
 
               <div>

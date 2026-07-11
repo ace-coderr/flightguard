@@ -199,6 +199,28 @@ async function getFdcRequestFee(publicClient: PublicClient, abiEncodedRequest: `
   });
 }
 
+/** The FDC voting round covering a given chain timestamp (defaults to now). Public,
+ *  stateless chain math — same formula FlareSystemsManager/the FDC protocol use to
+ *  bucket attestation requests into rounds. */
+export async function getCurrentVotingRound(publicClient: PublicClient, atTimestamp?: bigint): Promise<number> {
+  const flareSystemsManagerAddress = await getContractAddressByName(publicClient, "FlareSystemsManager");
+  const [firstVotingRoundStartTs, votingEpochDurationSeconds] = await Promise.all([
+    publicClient.readContract({
+      address: flareSystemsManagerAddress,
+      abi: flareSystemsManagerAbi,
+      functionName: "firstVotingRoundStartTs",
+    }),
+    publicClient.readContract({
+      address: flareSystemsManagerAddress,
+      abi: flareSystemsManagerAbi,
+      functionName: "votingEpochDurationSeconds",
+    }),
+  ]);
+
+  const timestamp = atTimestamp ?? BigInt(Math.floor(Date.now() / 1000));
+  return Number((timestamp - firstVotingRoundStartTs) / votingEpochDurationSeconds);
+}
+
 /** Submit to FdcHub.requestAttestation{value: fee}(abiEncodedRequest) and derive the voting round it lands in. */
 export async function submitAttestationRequest(
   publicClient: PublicClient,
@@ -225,21 +247,7 @@ export async function submitAttestationRequest(
   const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash });
   const block = await publicClient.getBlock({ blockNumber: receipt.blockNumber });
 
-  const flareSystemsManagerAddress = await getContractAddressByName(publicClient, "FlareSystemsManager");
-  const [firstVotingRoundStartTs, votingEpochDurationSeconds] = await Promise.all([
-    publicClient.readContract({
-      address: flareSystemsManagerAddress,
-      abi: flareSystemsManagerAbi,
-      functionName: "firstVotingRoundStartTs",
-    }),
-    publicClient.readContract({
-      address: flareSystemsManagerAddress,
-      abi: flareSystemsManagerAbi,
-      functionName: "votingEpochDurationSeconds",
-    }),
-  ]);
-
-  const roundId = Number((block.timestamp - firstVotingRoundStartTs) / votingEpochDurationSeconds);
+  const roundId = await getCurrentVotingRound(publicClient, block.timestamp);
   return { roundId, txHash };
 }
 

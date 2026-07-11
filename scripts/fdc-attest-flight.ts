@@ -44,11 +44,15 @@ const verifierUrlBase = VERIFIER_URL_TESTNET;
 // airlabs.co /v9/flight returns the latest occurrence of the flight as a single
 // object under .response, with status ("landed"/"cancelled"/...) and arr_delayed
 // (arrival delay in minutes, null when on time -> `// 0` fallback).
-// The select() locks the proof to the requested date: if the API is returning a
-// different day's flight, jq outputs nothing and the attestation fails instead of
-// attesting the wrong flight.
+// dep_time_utc (scheduled departure, UTC) anchors the date-lock instead of arr_time_utc:
+// it's stable across delays/cancellations, whereas arr_time_utc can be missing entirely
+// for a cancelled flight and, for overnight flights, falls on the *next* UTC date - which
+// would never match a lock keyed on the departure date. If the attested response is about
+// a different day's occurrence of this flight number, this degrades to a fixed "EMPTY"/0
+// output (never a payout) instead of failing the attestation outright.
+// MUST stay byte-for-byte identical to web/lib/server/flightRequest.ts's buildPostProcessJq.
 function buildPostProcessJq(date: string) {
-    return `{flightStatus: (.response.status // .error.message // "EMPTY"), delayMinutes: (.response.arr_delayed // 0)}`;
+    return `(.response.dep_time_utc // "" | startswith("${date}")) as $match | {flightStatus: (if $match then (.response.status // .error.message // "EMPTY") else "EMPTY" end), delayMinutes: (if $match then (.response.arr_delayed // 0) else 0 end)}`;
 }
 
 // The exact request we attest. IMPORTANT: this same (url, postProcessJq, abiSignature)
@@ -172,8 +176,9 @@ if (require.main === module) {
  * - Flight data: airlabs.co /v9/flight (free tier: 1000 req/month total).
  *   AviationStack was abandoned: verifier server fetches to it fail
  *   ('INVALID: FETCH ERROR') even though browser requests succeed.
- * - The jq date-lock uses arr_time_utc (scheduled arrival, stable) so the same
- *   requestHash computed at buyCover time still matches at settle time.
+ * - The jq date-lock uses dep_time_utc (scheduled departure, always present even for
+ *   cancellations, and not shifted by overnight arrivals landing on the next UTC date)
+ *   so the same requestHash computed at buyCover time still matches at settle time.
  * - API key in URL is visible in the attested request onchain. Fine for demo;
  *   note it in README as known limitation + roadmap item.
  */

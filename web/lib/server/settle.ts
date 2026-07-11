@@ -44,7 +44,7 @@ export async function startSettleJob(flightIataInput: string, dateInput: string)
 
   // Same builder as /api/flight-request, so this produces byte-for-byte the same
   // requestBody (and therefore requestHash) as the one the policy was bought against.
-  const requestBody = buildFlightRequestBody(flightIata, apiKey);
+  const requestBody = buildFlightRequestBody(flightIata, date, apiKey);
   computeRequestHash(requestBody); // sanity: throws if requestBody is malformed
 
   const abiEncodedRequest = await prepareWeb2JsonRequest(requestBody);

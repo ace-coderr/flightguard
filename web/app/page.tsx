@@ -46,8 +46,8 @@ export default function Home() {
             </h1>
             <p className="max-w-md text-balance text-lg text-muted">
               Buy flight-delay cover in USDT0. When Flare&apos;s Data Connector attests a
-              2+ hour delay or cancellation, the pool pays out automatically — no
-              claims, no adjuster.
+              2+ hour delay or cancellation, a settlement keeper pays the pool out
+              automatically — no claims, no adjuster, no action required.
             </p>
             <div className="flex flex-wrap gap-3">
               <Link
@@ -173,7 +173,9 @@ export default function Home() {
                 FlightGuard&apos;s <span className="font-mono text-white">settle()</span>{" "}
                 checks that proof against the policy and, if the flight was
                 delayed 2+ hours or cancelled, pays the cover amount in the
-                same transaction.
+                same transaction. A settlement keeper checks every active
+                policy automatically after scheduled arrival — no claim, no
+                button, no action from you.
               </p>
             </div>
 

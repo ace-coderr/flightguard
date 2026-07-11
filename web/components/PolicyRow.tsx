@@ -1,10 +1,10 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useWaitForTransactionReceipt, useWriteContract } from "wagmi";
 import { flightGuardConfig, POLICY_STATUS_LABEL, PolicyStatus } from "@/lib/contracts";
 import { formatAmount, formatDate } from "@/lib/format";
-import { getPolicyMeta } from "@/lib/policyMeta";
 
 export type Policy = {
   id: number;
@@ -13,8 +13,16 @@ export type Policy = {
   premium: bigint;
   scheduledArrival: number;
   requestHash: `0x${string}`;
+  flightRef: string;
   status: PolicyStatus;
 };
+
+/** "BA75|2026-07-11" -> { flightIata, date } — tolerant of malformed data since it's
+ *  purely for display; the keeper does its own strict parsing server-side. */
+function parsePolicyFlightRef(flightRef: string): { flightIata: string; date: string } | null {
+  const [flightIata, date] = flightRef.split("|");
+  return flightIata && date ? { flightIata, date } : null;
+}
 
 type SettlePhase = "submitted" | "waiting_finalization" | "fetching_proof" | "ready" | "failed";
 
@@ -112,11 +120,8 @@ const smallButtonClass =
 const smallBrandButtonClass =
   "rounded-full bg-brand px-4 py-2 text-xs font-semibold text-white transition-colors hover:bg-brand-hover disabled:cursor-not-allowed disabled:opacity-50";
 
-const inputClass =
-  "rounded-lg border border-ink/15 bg-canvas px-3 py-1.5 text-xs text-ink placeholder-muted outline-none transition-colors focus:border-ink";
-
 export function PolicyRow({ policy, rowGridClass, onSettled }: { policy: Policy; rowGridClass: string; onSettled: () => void }) {
-  const meta = getPolicyMeta(policy.requestHash);
+  const meta = parsePolicyFlightRef(policy.flightRef);
 
   const [jobId, setJobId] = useState<string | null>(null);
   const [roundId, setRoundId] = useState<number | null>(null);
@@ -125,10 +130,27 @@ export function PolicyRow({ policy, rowGridClass, onSettled }: { policy: Policy;
   const [maxPhaseIndex, setMaxPhaseIndex] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [proof, setProof] = useState<JsonProof | null>(null);
-  const [showManualInput, setShowManualInput] = useState(false);
-  const [manualFlightIata, setManualFlightIata] = useState("");
-  const [manualDate, setManualDate] = useState("");
   const [activeFlight, setActiveFlight] = useState<{ flightIata: string; date: string } | null>(null);
+
+  const nowSec = Math.floor(Date.now() / 1000);
+  const isSettleEligible = policy.status === PolicyStatus.Active && nowSec >= policy.scheduledArrival;
+  // phase (not just jobId) so the trace panel doesn't flicker back to the "Settle now"
+  // button during the brief window between clicking retry and the new job's response.
+  const inProgress = jobId !== null || phase !== null;
+
+  // Real, live FDC voting round for "Auto-settlement in progress · round N" — the
+  // keeper itself has no persisted state to query, but a voting round is a public,
+  // stateless fact of chain time, so this is honest without needing a job store.
+  const { data: currentRound } = useQuery({
+    queryKey: ["current-voting-round"],
+    queryFn: async () => {
+      const res = await fetch("/api/keeper/round");
+      if (!res.ok) throw new Error("Failed to fetch current round");
+      return (await res.json()) as { roundId: number };
+    },
+    enabled: isSettleEligible && !inProgress,
+    refetchInterval: 20_000,
+  });
 
   const { writeContract: writeSettle, data: settleHash, isPending: isSettlePending, error: settleError } = useWriteContract();
   const { isLoading: isSettleConfirming, isSuccess: isSettleConfirmed } = useWaitForTransactionReceipt({ hash: settleHash });
@@ -193,7 +215,6 @@ export function PolicyRow({ policy, rowGridClass, onSettled }: { policy: Policy;
     setMaxPhaseIndex(0);
     setPhase("submitted");
     setActiveFlight({ flightIata, date });
-    setShowManualInput(false);
     // Clear any previous job's reconstruction key first so a stale poll can't fire mid-transition.
     setJobId(null);
     setRoundId(null);
@@ -216,17 +237,8 @@ export function PolicyRow({ policy, rowGridClass, onSettled }: { policy: Policy;
   }
 
   function handleSettleClick() {
-    if (meta) {
-      void startSettlement(meta.flightIata, meta.date);
-    } else {
-      setShowManualInput(true);
-    }
-  }
-
-  function handleManualSubmit(e: FormEvent) {
-    e.preventDefault();
-    if (!manualFlightIata || !manualDate) return;
-    void startSettlement(manualFlightIata.trim().toUpperCase(), manualDate);
+    if (!meta) return;
+    void startSettlement(meta.flightIata, meta.date);
   }
 
   function handleRetry() {
@@ -243,12 +255,6 @@ export function PolicyRow({ policy, rowGridClass, onSettled }: { policy: Policy;
     });
   }
 
-  const nowSec = Math.floor(Date.now() / 1000);
-  const isSettleEligible = policy.status === PolicyStatus.Active && nowSec >= policy.scheduledArrival;
-  // phase (not just jobId) so the trace panel doesn't flicker back to the "Settle now"
-  // button during the brief window between clicking retry and the new job's response.
-  const inProgress = jobId !== null || phase !== null;
-
   return (
     <div className="flex flex-col gap-4 rounded-2xl border border-ink/10 bg-white px-6 py-5 text-sm">
       <div className={`grid grid-cols-2 gap-x-4 gap-y-2 md:items-center ${rowGridClass}`}>
@@ -264,46 +270,18 @@ export function PolicyRow({ policy, rowGridClass, onSettled }: { policy: Policy;
         </span>
       </div>
 
-      {isSettleEligible && !inProgress && !showManualInput && (
-        <div className="flex justify-end border-t border-ink/10 pt-4">
-          <button onClick={handleSettleClick} className={smallButtonClass}>
-            Settle now
-          </button>
+      {isSettleEligible && !inProgress && (
+        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-ink/10 pt-4">
+          <span className="flex items-center gap-2 font-mono text-xs text-muted">
+            <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-brand" aria-hidden />
+            Auto-settlement in progress{currentRound ? ` · round ${currentRound.roundId}` : ""}
+          </span>
+          {meta && (
+            <button onClick={handleSettleClick} className={smallButtonClass}>
+              Settle now
+            </button>
+          )}
         </div>
-      )}
-
-      {isSettleEligible && !inProgress && showManualInput && (
-        <form onSubmit={handleManualSubmit} className="flex flex-wrap items-end gap-3 border-t border-ink/10 pt-4">
-          <p className="w-full text-xs text-muted">
-            No saved flight info for this policy (different browser/device?). Enter it again — it must match what you bought cover for.
-          </p>
-          <label className="flex flex-col gap-1 text-xs text-muted">
-            Flight number
-            <input
-              required
-              placeholder="BA75"
-              value={manualFlightIata}
-              onChange={(e) => setManualFlightIata(e.target.value)}
-              className={`${inputClass} font-mono uppercase placeholder:normal-case`}
-            />
-          </label>
-          <label className="flex flex-col gap-1 text-xs text-muted">
-            Flight date
-            <input
-              required
-              type="date"
-              value={manualDate}
-              onChange={(e) => setManualDate(e.target.value)}
-              className={`${inputClass} font-mono`}
-            />
-          </label>
-          <button type="submit" className={smallButtonClass}>
-            Start settlement
-          </button>
-          <button type="button" onClick={() => setShowManualInput(false)} className="text-xs text-muted underline">
-            Cancel
-          </button>
-        </form>
       )}
 
       {inProgress && (

@@ -96,7 +96,8 @@ async function main() {
     console.log("Request hash:", requestHash, "\n");
 
     const scheduledArrival = Math.floor(Date.now() / 1000) + scheduledArrivalDelaySec;
-    const buyTx = await flightGuard.buyCover(coverAmount, scheduledArrival, requestHash, { from: account });
+    const flightRef = `${flightIata}|${flightDate}`;
+    const buyTx = await flightGuard.buyCover(coverAmount, scheduledArrival, requestHash, flightRef, { from: account });
     const coverBoughtEvent = buyTx.logs.find((e: any) => e.event === "CoverBought");
     const policyId = coverBoughtEvent.args.policyId;
     console.log("BuyCover tx:", buyTx.tx, "policyId:", policyId.toString(), "\n");

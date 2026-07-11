@@ -28,3 +28,9 @@ export function formatDate(unixSeconds: number): string {
     year: "numeric",
   });
 }
+
+/** "18:45 UTC" from airlabs' "YYYY-MM-DD HH:MM" UTC timestamp format. */
+export function formatUtcTime(timeUtc: string): string {
+  const time = timeUtc.split(" ")[1];
+  return time ? `${time} UTC` : timeUtc;
+}

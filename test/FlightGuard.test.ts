@@ -4,11 +4,13 @@ import { loadFixture, time } from "@nomicfoundation/hardhat-network-helpers";
 
 // Generic (non-secret) stand-in for the real airlabs.co request built by
 // scripts/fdc-attest-flight.ts's buildFlightRequestBody - same shape, no API key.
+// postProcessJq matches buildPostProcessJq's date-lock (keyed on dep_time_utc, matching
+// FLIGHT_REF's "2026-07-10" below) byte-for-byte.
 const REQUEST = {
     url: "https://airlabs.co/api/v9/flight",
     headers: "{}",
     queryParams: JSON.stringify({ flight_iata: "BA75" }),
-    postProcessJq: `{flightStatus: (.response.status // .error.message // "EMPTY"), delayMinutes: (.response.arr_delayed // 0)}`,
+    postProcessJq: `(.response.dep_time_utc // "" | startswith("2026-07-10")) as $match | {flightStatus: (if $match then (.response.status // .error.message // "EMPTY") else "EMPTY" end), delayMinutes: (if $match then (.response.arr_delayed // 0) else 0 end)}`,
     abiSignature: `{"components":[{"internalType":"string","name":"flightStatus","type":"string"},{"internalType":"uint256","name":"delayMinutes","type":"uint256"}],"name":"dto","type":"tuple"}`,
 };
 
@@ -85,19 +87,22 @@ async function deployFixture() {
     return { owner, backer, backer2, traveler, other, token, verifier, flightGuard };
 }
 
+const FLIGHT_REF = "BA75|2026-07-10";
+
 // Buys cover on REQUEST (or a custom request) and returns the resulting policyId +
 // scheduledArrival, leaving the policy Active and ready to settle/expire.
 async function buyActivePolicy(
     flightGuard: any,
     traveler: any,
     coverAmount = ethers.parseUnits("40", 6),
-    req: typeof REQUEST = REQUEST
+    req: typeof REQUEST = REQUEST,
+    flightRef: string = FLIGHT_REF
 ) {
     const scheduledArrival = (await time.latest()) + 3600;
     const requestHash = computeRequestHash(req);
-    await flightGuard.connect(traveler).buyCover(coverAmount, scheduledArrival, requestHash);
+    await flightGuard.connect(traveler).buyCover(coverAmount, scheduledArrival, requestHash, flightRef);
     const policyId = (await flightGuard.policyCount()) - 1n;
-    return { policyId, scheduledArrival, requestHash, coverAmount };
+    return { policyId, scheduledArrival, requestHash, coverAmount, flightRef };
 }
 
 describe("FlightGuard", () => {
@@ -181,16 +186,39 @@ describe("FlightGuard", () => {
             const scheduledArrival = (await time.latest()) + 3600;
             const requestHash = computeRequestHash();
 
-            await expect(flightGuard.connect(traveler).buyCover(coverAmount, scheduledArrival, requestHash))
+            await expect(
+                flightGuard.connect(traveler).buyCover(coverAmount, scheduledArrival, requestHash, FLIGHT_REF)
+            )
                 .to.emit(flightGuard, "CoverBought")
-                .withArgs(0n, traveler.address, coverAmount, premium, requestHash);
+                .withArgs(0n, traveler.address, coverAmount, premium, requestHash, FLIGHT_REF);
 
             expect(await flightGuard.totalLocked()).to.equal(coverAmount);
             const policy = await flightGuard.policies(0n);
             expect(policy.holder).to.equal(traveler.address);
             expect(policy.coverAmount).to.equal(coverAmount);
             expect(policy.premium).to.equal(premium);
+            expect(policy.flightRef).to.equal(FLIGHT_REF);
             expect(policy.status).to.equal(0n); // Active
+        });
+
+        it("stores flightRef in the policy and emits it in CoverBought", async () => {
+            const { flightGuard, backer, traveler } = await loadFixture(deployFixture);
+            await flightGuard.connect(backer).deposit(ethers.parseUnits("100", 6));
+            const coverAmount = ethers.parseUnits("25", 6);
+            const premiumBps = await flightGuard.PREMIUM_BPS();
+            const premium = (coverAmount * premiumBps) / 10_000n;
+            const scheduledArrival = (await time.latest()) + 3600;
+            const requestHash = computeRequestHash();
+            const flightRef = "KL1631|2026-08-01";
+
+            await expect(
+                flightGuard.connect(traveler).buyCover(coverAmount, scheduledArrival, requestHash, flightRef)
+            )
+                .to.emit(flightGuard, "CoverBought")
+                .withArgs(0n, traveler.address, coverAmount, premium, requestHash, flightRef);
+
+            const policy = await flightGuard.policies(0n);
+            expect(policy.flightRef).to.equal(flightRef);
         });
 
         it("reverts when coverAmount is zero", async () => {
@@ -198,7 +226,7 @@ describe("FlightGuard", () => {
             await flightGuard.connect(backer).deposit(ethers.parseUnits("100", 6));
             const scheduledArrival = (await time.latest()) + 3600;
             await expect(
-                flightGuard.connect(traveler).buyCover(0, scheduledArrival, computeRequestHash())
+                flightGuard.connect(traveler).buyCover(0, scheduledArrival, computeRequestHash(), FLIGHT_REF)
             ).to.be.revertedWith("cover out of range");
         });
 
@@ -208,7 +236,7 @@ describe("FlightGuard", () => {
             await flightGuard.connect(backer).deposit(maxCover * 2n);
             const scheduledArrival = (await time.latest()) + 3600;
             await expect(
-                flightGuard.connect(traveler).buyCover(maxCover + 1n, scheduledArrival, computeRequestHash())
+                flightGuard.connect(traveler).buyCover(maxCover + 1n, scheduledArrival, computeRequestHash(), FLIGHT_REF)
             ).to.be.revertedWith("cover out of range");
         });
 
@@ -217,7 +245,9 @@ describe("FlightGuard", () => {
             await flightGuard.connect(backer).deposit(ethers.parseUnits("100", 6));
             const pastArrival = (await time.latest()) - 10;
             await expect(
-                flightGuard.connect(traveler).buyCover(ethers.parseUnits("10", 6), pastArrival, computeRequestHash())
+                flightGuard
+                    .connect(traveler)
+                    .buyCover(ethers.parseUnits("10", 6), pastArrival, computeRequestHash(), FLIGHT_REF)
             ).to.be.revertedWith("flight in past");
         });
 
@@ -228,7 +258,7 @@ describe("FlightGuard", () => {
             await expect(
                 flightGuard
                     .connect(traveler)
-                    .buyCover(ethers.parseUnits("11", 6), scheduledArrival, computeRequestHash())
+                    .buyCover(ethers.parseUnits("11", 6), scheduledArrival, computeRequestHash(), FLIGHT_REF)
             ).to.be.revertedWith("insufficient pool");
         });
     });
@@ -299,6 +329,19 @@ describe("FlightGuard", () => {
             await expect(flightGuard.settle(policyId, buildProof())).to.be.revertedWith("invalid FDC proof");
         });
 
+        it("keeps flightRef readable via policies() unchanged after settle", async () => {
+            const { flightGuard, backer, traveler } = await loadFixture(deployFixture);
+            await flightGuard.connect(backer).deposit(ethers.parseUnits("100", 6));
+            const { policyId, scheduledArrival, flightRef } = await buyActivePolicy(flightGuard, traveler);
+            await time.increaseTo(scheduledArrival);
+
+            await flightGuard.settle(policyId, buildProof({ flightStatus: "cancelled" }));
+
+            const policy = await flightGuard.policies(policyId);
+            expect(policy.flightRef).to.equal(flightRef);
+            expect(policy.status).to.equal(1n); // PaidOut
+        });
+
         it("reverts settle before scheduledArrival", async () => {
             const { flightGuard, backer, traveler } = await loadFixture(deployFixture);
             await flightGuard.connect(backer).deposit(ethers.parseUnits("100", 6));
@@ -354,6 +397,66 @@ describe("FlightGuard", () => {
             await expect(flightGuard.settle(policyId, proof))
                 .to.emit(flightGuard, "Settled")
                 .withArgs(policyId, 3n, 0n, false); // NoPayout, delayMinutes: 0, cancelled: false
+        });
+    });
+
+    describe("real cancelled flight (airlabs live capture)", () => {
+        // Raw airlabs.co /v9/flight response for B6869 (JFK -> PUJ), captured live on
+        // 2026-07-11 via https://airlabs.co/api/v9/flight?flight_iata=B6869. Confirms the
+        // shape buildPostProcessJq relies on for a real cancelled flight: status is
+        // "cancelled", arr_delayed is null (-> `// 0` fallback) since it never departed,
+        // and - the point of the date-lock fix - dep_time_utc is present and stable even
+        // though the flight was cancelled, unlike arr_time_utc which flaw (b) noted can be
+        // absent entirely for cancellations.
+        const REAL_CANCELLED_FLIGHT_RESPONSE = {
+            response: {
+                airline_iata: "B6",
+                flight_iata: "B6869",
+                flight_number: "869",
+                dep_iata: "JFK",
+                dep_time_utc: "2026-07-11 10:15",
+                arr_iata: "PUJ",
+                arr_time_utc: "2026-07-11 14:11",
+                status: "cancelled",
+                dep_delayed: null,
+                arr_delayed: null,
+            },
+        };
+
+        // JS mirror of buildPostProcessJq's jq expression (web/lib/server/flightRequest.ts
+        // and scripts/fdc-attest-flight.ts). `??` stands in for jq's `//` alternative
+        // operator - equivalent here since these fields are only ever string, number, or
+        // null/undefined, never `false`.
+        function applyPostProcessJq(raw: typeof REAL_CANCELLED_FLIGHT_RESPONSE, date: string) {
+            const match = (raw.response?.dep_time_utc ?? "").startsWith(date);
+            return {
+                flightStatus: match ? (raw.response?.status ?? "EMPTY") : "EMPTY",
+                delayMinutes: match ? (raw.response?.arr_delayed ?? 0) : 0,
+            };
+        }
+
+        it("encodes a real cancelled flight as (cancelled, 0) when the date matches dep_time_utc", () => {
+            const dto = applyPostProcessJq(REAL_CANCELLED_FLIGHT_RESPONSE, "2026-07-11");
+            expect(dto).to.deep.equal({ flightStatus: "cancelled", delayMinutes: 0 });
+        });
+
+        it("locks to EMPTY when the date doesn't match dep_time_utc", () => {
+            const dto = applyPostProcessJq(REAL_CANCELLED_FLIGHT_RESPONSE, "2026-07-12");
+            expect(dto).to.deep.equal({ flightStatus: "EMPTY", delayMinutes: 0 });
+        });
+
+        it("pays out a policy settled with this real cancelled-flight shape", async () => {
+            const { flightGuard, token, backer, traveler } = await loadFixture(deployFixture);
+            await flightGuard.connect(backer).deposit(ethers.parseUnits("100", 6));
+            const { policyId, scheduledArrival, coverAmount } = await buyActivePolicy(flightGuard, traveler);
+            await time.increaseTo(scheduledArrival);
+
+            const dto = applyPostProcessJq(REAL_CANCELLED_FLIGHT_RESPONSE, "2026-07-11");
+            const proof = buildProof({ flightStatus: dto.flightStatus, delayMinutes: dto.delayMinutes });
+            await expect(flightGuard.settle(policyId, proof)).to.changeTokenBalance(token, traveler, coverAmount);
+
+            const policy = await flightGuard.policies(policyId);
+            expect(policy.status).to.equal(1n); // PaidOut
         });
     });
 });

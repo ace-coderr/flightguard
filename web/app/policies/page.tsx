@@ -34,18 +34,19 @@ export default function PoliciesPage() {
             ...flightGuardConfig,
             functionName: "policies",
             args: [BigInt(id)],
-          }) as Promise<readonly [string, bigint, bigint, number, `0x${string}`, number]>
+          }) as Promise<readonly [string, bigint, bigint, number, `0x${string}`, string, number]>
         )
       );
       return results
         .map(
-          ([holder, coverAmount, premium, scheduledArrival, requestHash, status], id): Policy => ({
+          ([holder, coverAmount, premium, scheduledArrival, requestHash, flightRef, status], id): Policy => ({
             id,
             holder,
             coverAmount,
             premium,
             scheduledArrival: Number(scheduledArrival),
             requestHash,
+            flightRef,
             status,
           })
         )
@@ -53,6 +54,9 @@ export default function PoliciesPage() {
         .reverse();
     },
     enabled: Boolean(publicClient) && policyCount !== undefined && Boolean(address),
+    // Keeper-driven settlements happen without any browser interaction, so this page
+    // must poll to notice status flips it didn't itself trigger.
+    refetchInterval: 30_000,
   });
 
   const summary = useMemo(() => {
