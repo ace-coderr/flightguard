@@ -2,10 +2,12 @@
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { useAccount, useReadContract, useWaitForTransactionReceipt, useWriteContract } from "wagmi";
-import { parseUnits } from "viem";
-import { flightGuardConfig, usdt0Config, MAX_COVER, PREMIUM_BPS, USDT0_DECIMALS } from "@/lib/contracts";
+import { formatUnits, parseUnits } from "viem";
+import { flightGuardConfig, usdt0Config, fxrpConfig, MAX_COVER, PREMIUM_BPS, USDT0_DECIMALS } from "@/lib/contracts";
 import { formatAmount, formatDate, formatUtcTime } from "@/lib/format";
 import { ExplorerLink } from "@/components/ExplorerLink";
+
+type PayWith = "USDT0" | "FXRP";
 
 type Quote = {
   flightIata: string;
@@ -39,13 +41,34 @@ export default function CoverPage() {
   const [quote, setQuote] = useState<Quote | null>(null);
   const [quoteError, setQuoteError] = useState<string | null>(null);
   const [isQuoting, setIsQuoting] = useState(false);
+  const [payWith, setPayWith] = useState<PayWith>("USDT0");
 
-  const { data: allowance, refetch: refetchAllowance } = useReadContract({
+  const { data: usdt0Allowance, refetch: refetchUsdt0Allowance } = useReadContract({
     ...usdt0Config,
     functionName: "allowance",
     args: address ? [address, flightGuardConfig.address] : undefined,
-    query: { enabled: Boolean(address) },
+    query: { enabled: Boolean(address) && payWith === "USDT0" },
   });
+
+  const { data: fxrpAllowance, refetch: refetchFxrpAllowance } = useReadContract({
+    ...fxrpConfig,
+    functionName: "allowance",
+    args: address ? [address, flightGuardConfig.address] : undefined,
+    query: { enabled: Boolean(address) && payWith === "FXRP" },
+  });
+
+  // Live FTSO quote for the FXRP path: previewFxrpPremium isn't `view` (it calls FtsoV2's
+  // payable getFeedByIdInWei), but a read-only eth_call works regardless - same as any
+  // other contract read.
+  const { data: fxrpPreview } = useReadContract({
+    ...flightGuardConfig,
+    functionName: "previewFxrpPremium",
+    args: quote ? [quote.coverAmount] : undefined,
+    query: { enabled: Boolean(quote) && payWith === "FXRP", refetchInterval: 15_000 },
+  });
+  const [, fxrpAmount, xrpUsdPriceWei, usdtUsdPriceWei] = (fxrpPreview as
+    | readonly [bigint, bigint, bigint, bigint]
+    | undefined) ?? [undefined, undefined, undefined, undefined];
 
   const { writeContract: writeApprove, data: approveHash, isPending: isApprovePending } = useWriteContract();
   const { isLoading: isApproveConfirming, isSuccess: isApproveConfirmed } = useWaitForTransactionReceipt({
@@ -64,9 +87,14 @@ export default function CoverPage() {
 
   const needsApproval = useMemo(() => {
     if (!quote) return false;
-    if (allowance === undefined) return true;
-    return (allowance as bigint) < quote.premium;
-  }, [allowance, quote]);
+    if (payWith === "FXRP") {
+      if (fxrpAmount === undefined) return true;
+      if (fxrpAllowance === undefined) return true;
+      return (fxrpAllowance as bigint) < fxrpAmount;
+    }
+    if (usdt0Allowance === undefined) return true;
+    return (usdt0Allowance as bigint) < quote.premium;
+  }, [usdt0Allowance, fxrpAllowance, fxrpAmount, payWith, quote]);
 
   async function handleQuote(e: FormEvent) {
     e.preventDefault();
@@ -119,6 +147,11 @@ export default function CoverPage() {
 
   function handleApprove() {
     if (!quote) return;
+    if (payWith === "FXRP") {
+      if (fxrpAmount === undefined) return;
+      writeApprove({ ...fxrpConfig, functionName: "approve", args: [flightGuardConfig.address, fxrpAmount] });
+      return;
+    }
     writeApprove({
       ...usdt0Config,
       functionName: "approve",
@@ -128,6 +161,14 @@ export default function CoverPage() {
 
   function handleBuyCover() {
     if (!quote) return;
+    if (payWith === "FXRP") {
+      writeBuyCover({
+        ...flightGuardConfig,
+        functionName: "buyCoverWithFXRP",
+        args: [quote.coverAmount, quote.scheduledArrival, quote.requestHash, quote.flightRef],
+      });
+      return;
+    }
     writeBuyCover({
       ...flightGuardConfig,
       functionName: "buyCover",
@@ -136,8 +177,10 @@ export default function CoverPage() {
   }
 
   useEffect(() => {
-    if (isApproveConfirmed) refetchAllowance();
-  }, [isApproveConfirmed, refetchAllowance]);
+    if (!isApproveConfirmed) return;
+    if (payWith === "FXRP") refetchFxrpAllowance();
+    else refetchUsdt0Allowance();
+  }, [isApproveConfirmed, payWith, refetchFxrpAllowance, refetchUsdt0Allowance]);
 
   return (
     <div className="mx-auto max-w-6xl px-6 py-12">
@@ -246,10 +289,51 @@ export default function CoverPage() {
               </div>
 
               <div>
-                <div className="text-xs text-white/50">Premium (10%)</div>
-                <div className="font-mono text-4xl font-semibold text-brand">
-                  {formatAmount(quote.premium)} <span className="text-lg text-white/50">USDT0</span>
+                <div className="mb-2 flex items-center justify-between">
+                  <span className="text-xs text-white/50">Pay premium in</span>
+                  <div className="flex gap-1 rounded-full bg-white/10 p-1 font-mono text-xs">
+                    {(["USDT0", "FXRP"] as const).map((option) => (
+                      <button
+                        key={option}
+                        type="button"
+                        onClick={() => setPayWith(option)}
+                        className={`rounded-full px-3 py-1 transition-colors ${
+                          payWith === option ? "bg-brand text-white" : "text-white/60 hover:text-white"
+                        }`}
+                      >
+                        {option}
+                      </button>
+                    ))}
+                  </div>
                 </div>
+
+                <div className="text-xs text-white/50">Premium (10%)</div>
+                {payWith === "USDT0" ? (
+                  <div className="font-mono text-4xl font-semibold text-brand">
+                    {formatAmount(quote.premium)} <span className="text-lg text-white/50">USDT0</span>
+                  </div>
+                ) : (
+                  <>
+                    <div className="font-mono text-4xl font-semibold text-brand">
+                      {fxrpAmount !== undefined ? Number(formatUnits(fxrpAmount, 6)).toFixed(4) : "..."}{" "}
+                      <span className="text-lg text-white/50">FXRP</span>
+                    </div>
+                    <div className="mt-1 font-mono text-xs text-white/50">
+                      ≈ {formatAmount(quote.premium)} USDT0
+                      {xrpUsdPriceWei !== undefined && usdtUsdPriceWei !== undefined && (
+                        <>
+                          {" "}
+                          @ FTSO rate (XRP/USD ${Number(formatUnits(xrpUsdPriceWei, 18)).toFixed(4)}, USDT/USD $
+                          {Number(formatUnits(usdtUsdPriceWei, 18)).toFixed(4)})
+                        </>
+                      )}
+                    </div>
+                    <p className="mt-1 text-xs text-white/40">
+                      FXRP has no FTSO feed of its own - priced via the underlying XRP/USD feed, since FXRP is 1:1
+                      collateralized against real XRP.
+                    </p>
+                  </>
+                )}
               </div>
 
               <dl className="grid grid-cols-2 gap-y-2 border-t border-white/10 pt-4 text-sm">
@@ -266,10 +350,12 @@ export default function CoverPage() {
                   {needsApproval ? (
                     <button
                       onClick={handleApprove}
-                      disabled={isApprovePending || isApproveConfirming}
+                      disabled={
+                        isApprovePending || isApproveConfirming || (payWith === "FXRP" && fxrpAmount === undefined)
+                      }
                       className={darkButtonClass}
                     >
-                      {isApprovePending || isApproveConfirming ? "Approving..." : "Approve USDT0"}
+                      {isApprovePending || isApproveConfirming ? "Approving..." : `Approve ${payWith}`}
                     </button>
                   ) : (
                     <button

@@ -1,569 +1,809 @@
 [
-  {
-    "inputs": [
-      {
-        "internalType": "contract IERC20",
-        "name": "_token",
-        "type": "address"
-      },
-      {
-        "internalType": "contract IFdcVerification",
-        "name": "_fdcVerification",
-        "type": "address"
-      }
-    ],
-    "stateMutability": "nonpayable",
-    "type": "constructor"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "address",
-        "name": "token",
-        "type": "address"
-      }
-    ],
-    "name": "SafeERC20FailedOperation",
-    "type": "error"
-  },
-  {
-    "anonymous": false,
-    "inputs": [
-      {
-        "indexed": true,
-        "internalType": "uint256",
-        "name": "policyId",
-        "type": "uint256"
-      },
-      {
-        "indexed": true,
-        "internalType": "address",
-        "name": "holder",
-        "type": "address"
-      },
-      {
-        "indexed": false,
-        "internalType": "uint256",
-        "name": "coverAmount",
-        "type": "uint256"
-      },
-      {
-        "indexed": false,
-        "internalType": "uint256",
-        "name": "premium",
-        "type": "uint256"
-      },
-      {
-        "indexed": false,
-        "internalType": "bytes32",
-        "name": "requestHash",
-        "type": "bytes32"
-      },
-      {
-        "indexed": false,
-        "internalType": "string",
-        "name": "flightRef",
-        "type": "string"
-      }
-    ],
-    "name": "CoverBought",
-    "type": "event"
-  },
-  {
-    "anonymous": false,
-    "inputs": [
-      {
-        "indexed": true,
-        "internalType": "address",
-        "name": "backer",
-        "type": "address"
-      },
-      {
-        "indexed": false,
-        "internalType": "uint256",
-        "name": "amount",
-        "type": "uint256"
-      },
-      {
-        "indexed": false,
-        "internalType": "uint256",
-        "name": "sharesMinted",
-        "type": "uint256"
-      }
-    ],
-    "name": "Deposited",
-    "type": "event"
-  },
-  {
-    "anonymous": false,
-    "inputs": [
-      {
-        "indexed": true,
-        "internalType": "uint256",
-        "name": "policyId",
-        "type": "uint256"
-      },
-      {
-        "indexed": false,
-        "internalType": "enum FlightGuard.Status",
-        "name": "result",
-        "type": "uint8"
-      },
-      {
-        "indexed": false,
-        "internalType": "uint256",
-        "name": "delayMinutes",
-        "type": "uint256"
-      },
-      {
-        "indexed": false,
-        "internalType": "bool",
-        "name": "cancelled",
-        "type": "bool"
-      }
-    ],
-    "name": "Settled",
-    "type": "event"
-  },
-  {
-    "anonymous": false,
-    "inputs": [
-      {
-        "indexed": true,
-        "internalType": "address",
-        "name": "backer",
-        "type": "address"
-      },
-      {
-        "indexed": false,
-        "internalType": "uint256",
-        "name": "amount",
-        "type": "uint256"
-      },
-      {
-        "indexed": false,
-        "internalType": "uint256",
-        "name": "sharesBurned",
-        "type": "uint256"
-      }
-    ],
-    "name": "Withdrawn",
-    "type": "event"
-  },
-  {
-    "inputs": [],
-    "name": "CLAIM_WINDOW",
-    "outputs": [
-      {
-        "internalType": "uint256",
-        "name": "",
-        "type": "uint256"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [],
-    "name": "DELAY_THRESHOLD_MIN",
-    "outputs": [
-      {
-        "internalType": "uint256",
-        "name": "",
-        "type": "uint256"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [],
-    "name": "MAX_COVER",
-    "outputs": [
-      {
-        "internalType": "uint256",
-        "name": "",
-        "type": "uint256"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [],
-    "name": "PREMIUM_BPS",
-    "outputs": [
-      {
-        "internalType": "uint256",
-        "name": "",
-        "type": "uint256"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "coverAmount",
-        "type": "uint256"
-      },
-      {
-        "internalType": "uint64",
-        "name": "scheduledArrival",
-        "type": "uint64"
-      },
-      {
-        "internalType": "bytes32",
-        "name": "requestHash",
-        "type": "bytes32"
-      },
-      {
-        "internalType": "string",
-        "name": "flightRef",
-        "type": "string"
-      }
-    ],
-    "name": "buyCover",
-    "outputs": [
-      {
-        "internalType": "uint256",
-        "name": "policyId",
-        "type": "uint256"
-      }
-    ],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "amount",
-        "type": "uint256"
-      }
-    ],
-    "name": "deposit",
-    "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "policyId",
-        "type": "uint256"
-      }
-    ],
-    "name": "expire",
-    "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
-    "inputs": [],
-    "name": "fdcVerification",
-    "outputs": [
-      {
-        "internalType": "contract IFdcVerification",
-        "name": "",
-        "type": "address"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [],
-    "name": "freeLiquidity",
-    "outputs": [
-      {
-        "internalType": "uint256",
-        "name": "",
-        "type": "uint256"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [],
-    "name": "owner",
-    "outputs": [
-      {
-        "internalType": "address",
-        "name": "",
-        "type": "address"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "",
-        "type": "uint256"
-      }
-    ],
-    "name": "policies",
-    "outputs": [
-      {
-        "internalType": "address",
-        "name": "holder",
-        "type": "address"
-      },
-      {
-        "internalType": "uint256",
-        "name": "coverAmount",
-        "type": "uint256"
-      },
-      {
-        "internalType": "uint256",
-        "name": "premium",
-        "type": "uint256"
-      },
-      {
-        "internalType": "uint64",
-        "name": "scheduledArrival",
-        "type": "uint64"
-      },
-      {
-        "internalType": "bytes32",
-        "name": "requestHash",
-        "type": "bytes32"
-      },
-      {
-        "internalType": "string",
-        "name": "flightRef",
-        "type": "string"
-      },
-      {
-        "internalType": "enum FlightGuard.Status",
-        "name": "status",
-        "type": "uint8"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [],
-    "name": "policyCount",
-    "outputs": [
-      {
-        "internalType": "uint256",
-        "name": "",
-        "type": "uint256"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [],
-    "name": "poolBalance",
-    "outputs": [
-      {
-        "internalType": "uint256",
-        "name": "",
-        "type": "uint256"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "contract IFdcVerification",
-        "name": "v",
-        "type": "address"
-      }
-    ],
-    "name": "setFdcVerification",
-    "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "policyId",
-        "type": "uint256"
-      },
-      {
-        "components": [
-          {
-            "internalType": "bytes32[]",
-            "name": "merkleProof",
-            "type": "bytes32[]"
-          },
-          {
-            "components": [
-              {
-                "internalType": "bytes32",
-                "name": "attestationType",
-                "type": "bytes32"
-              },
-              {
-                "internalType": "bytes32",
-                "name": "sourceId",
-                "type": "bytes32"
-              },
-              {
-                "internalType": "uint64",
-                "name": "votingRound",
-                "type": "uint64"
-              },
-              {
-                "internalType": "uint64",
-                "name": "lowestUsedTimestamp",
-                "type": "uint64"
-              },
-              {
-                "components": [
-                  {
-                    "internalType": "string",
-                    "name": "url",
-                    "type": "string"
-                  },
-                  {
-                    "internalType": "string",
-                    "name": "httpMethod",
-                    "type": "string"
-                  },
-                  {
-                    "internalType": "string",
-                    "name": "headers",
-                    "type": "string"
-                  },
-                  {
-                    "internalType": "string",
-                    "name": "queryParams",
-                    "type": "string"
-                  },
-                  {
-                    "internalType": "string",
-                    "name": "body",
-                    "type": "string"
-                  },
-                  {
-                    "internalType": "string",
-                    "name": "postProcessJq",
-                    "type": "string"
-                  },
-                  {
-                    "internalType": "string",
-                    "name": "abiSignature",
-                    "type": "string"
-                  }
-                ],
-                "internalType": "struct IWeb2Json.RequestBody",
-                "name": "requestBody",
-                "type": "tuple"
-              },
-              {
-                "components": [
-                  {
-                    "internalType": "bytes",
-                    "name": "abiEncodedData",
-                    "type": "bytes"
-                  }
-                ],
-                "internalType": "struct IWeb2Json.ResponseBody",
-                "name": "responseBody",
-                "type": "tuple"
-              }
-            ],
-            "internalType": "struct IWeb2Json.Response",
-            "name": "data",
-            "type": "tuple"
-          }
+    {
+        "inputs": [
+            {
+                "internalType": "contract IERC20",
+                "name": "_token",
+                "type": "address"
+            },
+            {
+                "internalType": "contract IFdcVerification",
+                "name": "_fdcVerification",
+                "type": "address"
+            },
+            {
+                "internalType": "contract FtsoV2Interface",
+                "name": "_ftsoV2",
+                "type": "address"
+            },
+            {
+                "internalType": "contract IERC20",
+                "name": "_fxrpToken",
+                "type": "address"
+            }
         ],
-        "internalType": "struct IWeb2Json.Proof",
-        "name": "proof",
-        "type": "tuple"
-      }
-    ],
-    "name": "settle",
-    "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "address",
-        "name": "",
-        "type": "address"
-      }
-    ],
-    "name": "shares",
-    "outputs": [
-      {
-        "internalType": "uint256",
-        "name": "",
-        "type": "uint256"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [],
-    "name": "token",
-    "outputs": [
-      {
-        "internalType": "contract IERC20",
-        "name": "",
-        "type": "address"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [],
-    "name": "totalLocked",
-    "outputs": [
-      {
-        "internalType": "uint256",
-        "name": "",
-        "type": "uint256"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [],
-    "name": "totalShares",
-    "outputs": [
-      {
-        "internalType": "uint256",
-        "name": "",
-        "type": "uint256"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "shareAmount",
-        "type": "uint256"
-      }
-    ],
-    "name": "withdraw",
-    "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  }
+        "stateMutability": "nonpayable",
+        "type": "constructor"
+    },
+    {
+        "inputs": [
+            {
+                "internalType": "address",
+                "name": "token",
+                "type": "address"
+            }
+        ],
+        "name": "SafeERC20FailedOperation",
+        "type": "error"
+    },
+    {
+        "anonymous": false,
+        "inputs": [
+            {
+                "indexed": true,
+                "internalType": "uint256",
+                "name": "policyId",
+                "type": "uint256"
+            },
+            {
+                "indexed": true,
+                "internalType": "address",
+                "name": "holder",
+                "type": "address"
+            },
+            {
+                "indexed": false,
+                "internalType": "uint256",
+                "name": "coverAmount",
+                "type": "uint256"
+            },
+            {
+                "indexed": false,
+                "internalType": "uint256",
+                "name": "premium",
+                "type": "uint256"
+            },
+            {
+                "indexed": false,
+                "internalType": "bytes32",
+                "name": "requestHash",
+                "type": "bytes32"
+            },
+            {
+                "indexed": false,
+                "internalType": "string",
+                "name": "flightRef",
+                "type": "string"
+            }
+        ],
+        "name": "CoverBought",
+        "type": "event"
+    },
+    {
+        "anonymous": false,
+        "inputs": [
+            {
+                "indexed": true,
+                "internalType": "uint256",
+                "name": "policyId",
+                "type": "uint256"
+            },
+            {
+                "indexed": true,
+                "internalType": "address",
+                "name": "holder",
+                "type": "address"
+            },
+            {
+                "indexed": false,
+                "internalType": "uint256",
+                "name": "coverAmount",
+                "type": "uint256"
+            },
+            {
+                "indexed": false,
+                "internalType": "uint256",
+                "name": "premiumUsdt0Equivalent",
+                "type": "uint256"
+            },
+            {
+                "indexed": false,
+                "internalType": "uint256",
+                "name": "fxrpAmount",
+                "type": "uint256"
+            },
+            {
+                "indexed": false,
+                "internalType": "uint256",
+                "name": "xrpUsdPriceWei",
+                "type": "uint256"
+            },
+            {
+                "indexed": false,
+                "internalType": "uint256",
+                "name": "usdtUsdPriceWei",
+                "type": "uint256"
+            },
+            {
+                "indexed": false,
+                "internalType": "bytes32",
+                "name": "requestHash",
+                "type": "bytes32"
+            },
+            {
+                "indexed": false,
+                "internalType": "string",
+                "name": "flightRef",
+                "type": "string"
+            }
+        ],
+        "name": "CoverBoughtWithFXRP",
+        "type": "event"
+    },
+    {
+        "anonymous": false,
+        "inputs": [
+            {
+                "indexed": true,
+                "internalType": "address",
+                "name": "backer",
+                "type": "address"
+            },
+            {
+                "indexed": false,
+                "internalType": "uint256",
+                "name": "amount",
+                "type": "uint256"
+            },
+            {
+                "indexed": false,
+                "internalType": "uint256",
+                "name": "sharesMinted",
+                "type": "uint256"
+            }
+        ],
+        "name": "Deposited",
+        "type": "event"
+    },
+    {
+        "anonymous": false,
+        "inputs": [
+            {
+                "indexed": true,
+                "internalType": "uint256",
+                "name": "policyId",
+                "type": "uint256"
+            },
+            {
+                "indexed": false,
+                "internalType": "enum FlightGuard.Status",
+                "name": "result",
+                "type": "uint8"
+            },
+            {
+                "indexed": false,
+                "internalType": "uint256",
+                "name": "delayMinutes",
+                "type": "uint256"
+            },
+            {
+                "indexed": false,
+                "internalType": "bool",
+                "name": "cancelled",
+                "type": "bool"
+            }
+        ],
+        "name": "Settled",
+        "type": "event"
+    },
+    {
+        "anonymous": false,
+        "inputs": [
+            {
+                "indexed": true,
+                "internalType": "address",
+                "name": "backer",
+                "type": "address"
+            },
+            {
+                "indexed": false,
+                "internalType": "uint256",
+                "name": "amount",
+                "type": "uint256"
+            },
+            {
+                "indexed": false,
+                "internalType": "uint256",
+                "name": "sharesBurned",
+                "type": "uint256"
+            }
+        ],
+        "name": "Withdrawn",
+        "type": "event"
+    },
+    {
+        "inputs": [],
+        "name": "CLAIM_WINDOW",
+        "outputs": [
+            {
+                "internalType": "uint256",
+                "name": "",
+                "type": "uint256"
+            }
+        ],
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "inputs": [],
+        "name": "DELAY_THRESHOLD_MIN",
+        "outputs": [
+            {
+                "internalType": "uint256",
+                "name": "",
+                "type": "uint256"
+            }
+        ],
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "inputs": [],
+        "name": "FXRP_PROXY_FEED_ID",
+        "outputs": [
+            {
+                "internalType": "bytes21",
+                "name": "",
+                "type": "bytes21"
+            }
+        ],
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "inputs": [],
+        "name": "MAX_COVER",
+        "outputs": [
+            {
+                "internalType": "uint256",
+                "name": "",
+                "type": "uint256"
+            }
+        ],
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "inputs": [],
+        "name": "PREMIUM_BPS",
+        "outputs": [
+            {
+                "internalType": "uint256",
+                "name": "",
+                "type": "uint256"
+            }
+        ],
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "inputs": [],
+        "name": "USDT0_PROXY_FEED_ID",
+        "outputs": [
+            {
+                "internalType": "bytes21",
+                "name": "",
+                "type": "bytes21"
+            }
+        ],
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "inputs": [
+            {
+                "internalType": "uint256",
+                "name": "coverAmount",
+                "type": "uint256"
+            },
+            {
+                "internalType": "uint64",
+                "name": "scheduledArrival",
+                "type": "uint64"
+            },
+            {
+                "internalType": "bytes32",
+                "name": "requestHash",
+                "type": "bytes32"
+            },
+            {
+                "internalType": "string",
+                "name": "flightRef",
+                "type": "string"
+            }
+        ],
+        "name": "buyCover",
+        "outputs": [
+            {
+                "internalType": "uint256",
+                "name": "policyId",
+                "type": "uint256"
+            }
+        ],
+        "stateMutability": "nonpayable",
+        "type": "function"
+    },
+    {
+        "inputs": [
+            {
+                "internalType": "uint256",
+                "name": "coverAmount",
+                "type": "uint256"
+            },
+            {
+                "internalType": "uint64",
+                "name": "scheduledArrival",
+                "type": "uint64"
+            },
+            {
+                "internalType": "bytes32",
+                "name": "requestHash",
+                "type": "bytes32"
+            },
+            {
+                "internalType": "string",
+                "name": "flightRef",
+                "type": "string"
+            }
+        ],
+        "name": "buyCoverWithFXRP",
+        "outputs": [
+            {
+                "internalType": "uint256",
+                "name": "policyId",
+                "type": "uint256"
+            }
+        ],
+        "stateMutability": "nonpayable",
+        "type": "function"
+    },
+    {
+        "inputs": [
+            {
+                "internalType": "uint256",
+                "name": "amount",
+                "type": "uint256"
+            }
+        ],
+        "name": "deposit",
+        "outputs": [],
+        "stateMutability": "nonpayable",
+        "type": "function"
+    },
+    {
+        "inputs": [
+            {
+                "internalType": "uint256",
+                "name": "policyId",
+                "type": "uint256"
+            }
+        ],
+        "name": "expire",
+        "outputs": [],
+        "stateMutability": "nonpayable",
+        "type": "function"
+    },
+    {
+        "inputs": [],
+        "name": "fdcVerification",
+        "outputs": [
+            {
+                "internalType": "contract IFdcVerification",
+                "name": "",
+                "type": "address"
+            }
+        ],
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "inputs": [],
+        "name": "freeLiquidity",
+        "outputs": [
+            {
+                "internalType": "uint256",
+                "name": "",
+                "type": "uint256"
+            }
+        ],
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "inputs": [],
+        "name": "ftsoV2",
+        "outputs": [
+            {
+                "internalType": "contract FtsoV2Interface",
+                "name": "",
+                "type": "address"
+            }
+        ],
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "inputs": [],
+        "name": "fxrpPremiums",
+        "outputs": [
+            {
+                "internalType": "uint256",
+                "name": "",
+                "type": "uint256"
+            }
+        ],
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "inputs": [],
+        "name": "fxrpToken",
+        "outputs": [
+            {
+                "internalType": "contract IERC20",
+                "name": "",
+                "type": "address"
+            }
+        ],
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "inputs": [],
+        "name": "owner",
+        "outputs": [
+            {
+                "internalType": "address",
+                "name": "",
+                "type": "address"
+            }
+        ],
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "inputs": [
+            {
+                "internalType": "uint256",
+                "name": "",
+                "type": "uint256"
+            }
+        ],
+        "name": "policies",
+        "outputs": [
+            {
+                "internalType": "address",
+                "name": "holder",
+                "type": "address"
+            },
+            {
+                "internalType": "uint256",
+                "name": "coverAmount",
+                "type": "uint256"
+            },
+            {
+                "internalType": "uint256",
+                "name": "premium",
+                "type": "uint256"
+            },
+            {
+                "internalType": "uint64",
+                "name": "scheduledArrival",
+                "type": "uint64"
+            },
+            {
+                "internalType": "bytes32",
+                "name": "requestHash",
+                "type": "bytes32"
+            },
+            {
+                "internalType": "string",
+                "name": "flightRef",
+                "type": "string"
+            },
+            {
+                "internalType": "enum FlightGuard.Status",
+                "name": "status",
+                "type": "uint8"
+            },
+            {
+                "internalType": "bool",
+                "name": "premiumInFxrp",
+                "type": "bool"
+            }
+        ],
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "inputs": [],
+        "name": "policyCount",
+        "outputs": [
+            {
+                "internalType": "uint256",
+                "name": "",
+                "type": "uint256"
+            }
+        ],
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "inputs": [],
+        "name": "poolBalance",
+        "outputs": [
+            {
+                "internalType": "uint256",
+                "name": "",
+                "type": "uint256"
+            }
+        ],
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "inputs": [
+            {
+                "internalType": "uint256",
+                "name": "coverAmount",
+                "type": "uint256"
+            }
+        ],
+        "name": "previewFxrpPremium",
+        "outputs": [
+            {
+                "internalType": "uint256",
+                "name": "premiumUsdt0Equivalent",
+                "type": "uint256"
+            },
+            {
+                "internalType": "uint256",
+                "name": "fxrpAmount",
+                "type": "uint256"
+            },
+            {
+                "internalType": "uint256",
+                "name": "xrpUsdPriceWei",
+                "type": "uint256"
+            },
+            {
+                "internalType": "uint256",
+                "name": "usdtUsdPriceWei",
+                "type": "uint256"
+            }
+        ],
+        "stateMutability": "nonpayable",
+        "type": "function"
+    },
+    {
+        "inputs": [
+            {
+                "internalType": "contract IFdcVerification",
+                "name": "v",
+                "type": "address"
+            }
+        ],
+        "name": "setFdcVerification",
+        "outputs": [],
+        "stateMutability": "nonpayable",
+        "type": "function"
+    },
+    {
+        "inputs": [
+            {
+                "internalType": "contract FtsoV2Interface",
+                "name": "v",
+                "type": "address"
+            }
+        ],
+        "name": "setFtsoV2",
+        "outputs": [],
+        "stateMutability": "nonpayable",
+        "type": "function"
+    },
+    {
+        "inputs": [
+            {
+                "internalType": "uint256",
+                "name": "policyId",
+                "type": "uint256"
+            },
+            {
+                "components": [
+                    {
+                        "internalType": "bytes32[]",
+                        "name": "merkleProof",
+                        "type": "bytes32[]"
+                    },
+                    {
+                        "components": [
+                            {
+                                "internalType": "bytes32",
+                                "name": "attestationType",
+                                "type": "bytes32"
+                            },
+                            {
+                                "internalType": "bytes32",
+                                "name": "sourceId",
+                                "type": "bytes32"
+                            },
+                            {
+                                "internalType": "uint64",
+                                "name": "votingRound",
+                                "type": "uint64"
+                            },
+                            {
+                                "internalType": "uint64",
+                                "name": "lowestUsedTimestamp",
+                                "type": "uint64"
+                            },
+                            {
+                                "components": [
+                                    {
+                                        "internalType": "string",
+                                        "name": "url",
+                                        "type": "string"
+                                    },
+                                    {
+                                        "internalType": "string",
+                                        "name": "httpMethod",
+                                        "type": "string"
+                                    },
+                                    {
+                                        "internalType": "string",
+                                        "name": "headers",
+                                        "type": "string"
+                                    },
+                                    {
+                                        "internalType": "string",
+                                        "name": "queryParams",
+                                        "type": "string"
+                                    },
+                                    {
+                                        "internalType": "string",
+                                        "name": "body",
+                                        "type": "string"
+                                    },
+                                    {
+                                        "internalType": "string",
+                                        "name": "postProcessJq",
+                                        "type": "string"
+                                    },
+                                    {
+                                        "internalType": "string",
+                                        "name": "abiSignature",
+                                        "type": "string"
+                                    }
+                                ],
+                                "internalType": "struct IWeb2Json.RequestBody",
+                                "name": "requestBody",
+                                "type": "tuple"
+                            },
+                            {
+                                "components": [
+                                    {
+                                        "internalType": "bytes",
+                                        "name": "abiEncodedData",
+                                        "type": "bytes"
+                                    }
+                                ],
+                                "internalType": "struct IWeb2Json.ResponseBody",
+                                "name": "responseBody",
+                                "type": "tuple"
+                            }
+                        ],
+                        "internalType": "struct IWeb2Json.Response",
+                        "name": "data",
+                        "type": "tuple"
+                    }
+                ],
+                "internalType": "struct IWeb2Json.Proof",
+                "name": "proof",
+                "type": "tuple"
+            }
+        ],
+        "name": "settle",
+        "outputs": [],
+        "stateMutability": "nonpayable",
+        "type": "function"
+    },
+    {
+        "inputs": [
+            {
+                "internalType": "address",
+                "name": "",
+                "type": "address"
+            }
+        ],
+        "name": "shares",
+        "outputs": [
+            {
+                "internalType": "uint256",
+                "name": "",
+                "type": "uint256"
+            }
+        ],
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "inputs": [],
+        "name": "token",
+        "outputs": [
+            {
+                "internalType": "contract IERC20",
+                "name": "",
+                "type": "address"
+            }
+        ],
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "inputs": [],
+        "name": "totalLocked",
+        "outputs": [
+            {
+                "internalType": "uint256",
+                "name": "",
+                "type": "uint256"
+            }
+        ],
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "inputs": [],
+        "name": "totalShares",
+        "outputs": [
+            {
+                "internalType": "uint256",
+                "name": "",
+                "type": "uint256"
+            }
+        ],
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "inputs": [
+            {
+                "internalType": "uint256",
+                "name": "shareAmount",
+                "type": "uint256"
+            }
+        ],
+        "name": "withdraw",
+        "outputs": [],
+        "stateMutability": "nonpayable",
+        "type": "function"
+    },
+    {
+        "inputs": [
+            {
+                "internalType": "address",
+                "name": "to",
+                "type": "address"
+            },
+            {
+                "internalType": "uint256",
+                "name": "amount",
+                "type": "uint256"
+            }
+        ],
+        "name": "withdrawFxrpPremiums",
+        "outputs": [],
+        "stateMutability": "nonpayable",
+        "type": "function"
+    }
 ]

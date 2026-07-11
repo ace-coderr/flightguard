@@ -66,25 +66,49 @@ function buildProof(
     };
 }
 
+// Default mock FTSO prices: XRP ~$1.10, USDT ~$0.999 (close to real Coston2 values seen
+// live), both 18-decimal-normalized like the real getFeedByIdInWei.
+const XRP_USD_PRICE_WEI = ethers.parseUnits("1.10", 18);
+const USDT_USD_PRICE_WEI = ethers.parseUnits("0.999", 18);
+
 async function deployFixture() {
     const [owner, backer, backer2, traveler, other] = await ethers.getSigners();
 
     const MockERC20 = await ethers.getContractFactory("MockERC20");
     const token = await MockERC20.deploy("Mock USDT0", "mUSDT0", 6);
+    const fxrp = await MockERC20.deploy("Mock FXRP", "mFXRP", 6);
 
     const MockFdcVerification = await ethers.getContractFactory("MockFdcVerification");
     const verifier = await MockFdcVerification.deploy();
 
+    const MockFtsoV2 = await ethers.getContractFactory("MockFtsoV2");
+    const ftso = await MockFtsoV2.deploy();
+
     const FlightGuard = await ethers.getContractFactory("FlightGuard");
-    const flightGuard = await FlightGuard.deploy(await token.getAddress(), await verifier.getAddress());
+    const flightGuard = await FlightGuard.deploy(
+        await token.getAddress(),
+        await verifier.getAddress(),
+        await ftso.getAddress(),
+        await fxrp.getAddress()
+    );
+
+    const [fxrpFeedId, usdtFeedId] = await Promise.all([
+        flightGuard.FXRP_PROXY_FEED_ID(),
+        flightGuard.USDT0_PROXY_FEED_ID(),
+    ]);
+    await ftso.setPriceWei(fxrpFeedId, XRP_USD_PRICE_WEI);
+    await ftso.setPriceWei(usdtFeedId, USDT_USD_PRICE_WEI);
 
     const mintAmount = ethers.parseUnits("10000", 6);
+    const fxrpMintAmount = ethers.parseUnits("1000", 6);
     for (const s of [backer, backer2, traveler, other]) {
         await token.mint(s.address, mintAmount);
         await token.connect(s).approve(await flightGuard.getAddress(), ethers.MaxUint256);
+        await fxrp.mint(s.address, fxrpMintAmount);
+        await fxrp.connect(s).approve(await flightGuard.getAddress(), ethers.MaxUint256);
     }
 
-    return { owner, backer, backer2, traveler, other, token, verifier, flightGuard };
+    return { owner, backer, backer2, traveler, other, token, fxrp, verifier, ftso, flightGuard };
 }
 
 const FLIGHT_REF = "BA75|2026-07-10";
@@ -258,6 +282,168 @@ describe("FlightGuard", () => {
                     .connect(traveler)
                     .buyCover(ethers.parseUnits("11", 6), scheduledArrival, computeRequestHash(), FLIGHT_REF)
             ).to.be.revertedWith("insufficient pool");
+        });
+    });
+
+    describe("buyCoverWithFXRP", () => {
+        // Hand-computed against the fixture's mock prices (XRP $1.10, USDT $0.999) so the
+        // exact expected fxrpAmount is independently verified, not just re-derived from the
+        // contract's own formula.
+        function expectedFxrpAmount(
+            coverAmount: bigint,
+            xrpPriceWei = XRP_USD_PRICE_WEI,
+            usdtPriceWei = USDT_USD_PRICE_WEI
+        ) {
+            const premiumUsdt0 = (coverAmount * 1000n) / 10_000n; // PREMIUM_BPS
+            return (premiumUsdt0 * usdtPriceWei) / xrpPriceWei; // FXRP_DECIMALS == USDT0_DECIMALS (6), so they cancel
+        }
+
+        it("converts the USDT0 premium to FXRP at the mock FTSO rate and transfers it", async () => {
+            const { flightGuard, backer, traveler, fxrp } = await loadFixture(deployFixture);
+            await flightGuard.connect(backer).deposit(ethers.parseUnits("100", 6));
+
+            const coverAmount = ethers.parseUnits("40", 6);
+            const premiumBps = await flightGuard.PREMIUM_BPS();
+            const premiumUsdt0 = (coverAmount * premiumBps) / 10_000n;
+            const scheduledArrival = (await time.latest()) + 3600;
+            const requestHash = computeRequestHash();
+            const expectedFxrp = expectedFxrpAmount(coverAmount);
+
+            const travelerFxrpBefore = await fxrp.balanceOf(traveler.address);
+            const contractFxrpBefore = await fxrp.balanceOf(await flightGuard.getAddress());
+
+            await expect(
+                flightGuard.connect(traveler).buyCoverWithFXRP(coverAmount, scheduledArrival, requestHash, FLIGHT_REF)
+            )
+                .to.emit(flightGuard, "CoverBoughtWithFXRP")
+                .withArgs(
+                    0n,
+                    traveler.address,
+                    coverAmount,
+                    premiumUsdt0,
+                    expectedFxrp,
+                    XRP_USD_PRICE_WEI,
+                    USDT_USD_PRICE_WEI,
+                    requestHash,
+                    FLIGHT_REF
+                );
+
+            expect(await fxrp.balanceOf(traveler.address)).to.equal(travelerFxrpBefore - expectedFxrp);
+            expect(await fxrp.balanceOf(await flightGuard.getAddress())).to.equal(contractFxrpBefore + expectedFxrp);
+            expect(await flightGuard.fxrpPremiums()).to.equal(expectedFxrp);
+
+            // Cover is still locked from the USDT0 pool exactly like buyCover - the FXRP
+            // premium never touches poolBalance/totalLocked/freeLiquidity.
+            expect(await flightGuard.totalLocked()).to.equal(coverAmount);
+
+            const policy = await flightGuard.policies(0n);
+            expect(policy.holder).to.equal(traveler.address);
+            expect(policy.coverAmount).to.equal(coverAmount);
+            expect(policy.premium).to.equal(premiumUsdt0); // stored as the USDT0-equivalent, not the FXRP amount
+            expect(policy.status).to.equal(0n); // Active
+            expect(policy.premiumInFxrp).to.equal(true);
+        });
+
+        it("previewFxrpPremium quotes the same amount buyCoverWithFXRP charges", async () => {
+            const { flightGuard, traveler } = await loadFixture(deployFixture);
+            const coverAmount = ethers.parseUnits("40", 6);
+            const [premiumUsdt0Equivalent, fxrpAmount, xrpUsdPriceWei, usdtUsdPriceWei] = await flightGuard
+                .connect(traveler)
+                .previewFxrpPremium.staticCall(coverAmount);
+
+            expect(premiumUsdt0Equivalent).to.equal((coverAmount * 1000n) / 10_000n);
+            expect(fxrpAmount).to.equal(expectedFxrpAmount(coverAmount));
+            expect(xrpUsdPriceWei).to.equal(XRP_USD_PRICE_WEI);
+            expect(usdtUsdPriceWei).to.equal(USDT_USD_PRICE_WEI);
+        });
+
+        it("reflects a moved FTSO price immediately (no caching)", async () => {
+            const { flightGuard, backer, traveler, ftso } = await loadFixture(deployFixture);
+            await flightGuard.connect(backer).deposit(ethers.parseUnits("100", 6));
+
+            const doubledXrpPrice = XRP_USD_PRICE_WEI * 2n;
+            const fxrpFeedId = await flightGuard.FXRP_PROXY_FEED_ID();
+            await ftso.setPriceWei(fxrpFeedId, doubledXrpPrice);
+
+            const coverAmount = ethers.parseUnits("40", 6);
+            const scheduledArrival = (await time.latest()) + 3600;
+            const expectedFxrp = expectedFxrpAmount(coverAmount, doubledXrpPrice);
+
+            await expect(
+                flightGuard
+                    .connect(traveler)
+                    .buyCoverWithFXRP(coverAmount, scheduledArrival, computeRequestHash(), FLIGHT_REF)
+            )
+                .to.emit(flightGuard, "CoverBoughtWithFXRP")
+                .withArgs(
+                    0n,
+                    traveler.address,
+                    coverAmount,
+                    (coverAmount * 1000n) / 10_000n,
+                    expectedFxrp,
+                    doubledXrpPrice,
+                    USDT_USD_PRICE_WEI,
+                    computeRequestHash(),
+                    FLIGHT_REF
+                );
+
+            // Doubling XRP's price should have halved the FXRP the premium costs.
+            expect(expectedFxrp).to.equal(expectedFxrpAmount(coverAmount) / 2n);
+        });
+
+        it("reverts like buyCover on out-of-range cover/timing/liquidity, before touching FXRP", async () => {
+            const { flightGuard, backer, traveler, fxrp } = await loadFixture(deployFixture);
+            await flightGuard.connect(backer).deposit(ethers.parseUnits("100", 6));
+            const scheduledArrival = (await time.latest()) + 3600;
+            const travelerFxrpBefore = await fxrp.balanceOf(traveler.address);
+
+            await expect(
+                flightGuard.connect(traveler).buyCoverWithFXRP(0, scheduledArrival, computeRequestHash(), FLIGHT_REF)
+            ).to.be.revertedWith("cover out of range");
+
+            const pastArrival = (await time.latest()) - 10;
+            await expect(
+                flightGuard
+                    .connect(traveler)
+                    .buyCoverWithFXRP(ethers.parseUnits("10", 6), pastArrival, computeRequestHash(), FLIGHT_REF)
+            ).to.be.revertedWith("flight in past");
+
+            expect(await fxrp.balanceOf(traveler.address)).to.equal(travelerFxrpBefore);
+        });
+
+        it("reverts if a stale/zero FTSO price is returned", async () => {
+            const { flightGuard, backer, traveler, ftso } = await loadFixture(deployFixture);
+            await flightGuard.connect(backer).deposit(ethers.parseUnits("100", 6));
+            const fxrpFeedId = await flightGuard.FXRP_PROXY_FEED_ID();
+            await ftso.setPriceWei(fxrpFeedId, 0n);
+
+            const scheduledArrival = (await time.latest()) + 3600;
+            await expect(
+                flightGuard
+                    .connect(traveler)
+                    .buyCoverWithFXRP(ethers.parseUnits("10", 6), scheduledArrival, computeRequestHash(), FLIGHT_REF)
+            ).to.be.revertedWith("bad FTSO price");
+        });
+
+        it("settles an FXRP-premium policy exactly like a USDT0-premium one - payout still comes from the USDT0 pool", async () => {
+            const { flightGuard, backer, traveler, token } = await loadFixture(deployFixture);
+            await flightGuard.connect(backer).deposit(ethers.parseUnits("100", 6));
+
+            const coverAmount = ethers.parseUnits("40", 6);
+            const scheduledArrival = (await time.latest()) + 3600;
+            const requestHash = computeRequestHash();
+            await flightGuard
+                .connect(traveler)
+                .buyCoverWithFXRP(coverAmount, scheduledArrival, requestHash, FLIGHT_REF);
+
+            await time.increaseTo(scheduledArrival);
+            const holderBalanceBefore = await token.balanceOf(traveler.address);
+
+            await flightGuard.settle(0n, buildProof({ flightStatus: "cancelled", delayMinutes: 0 }));
+
+            expect(await token.balanceOf(traveler.address)).to.equal(holderBalanceBefore + coverAmount);
+            const policy = await flightGuard.policies(0n);
+            expect(policy.status).to.equal(1n); // PaidOut
         });
     });
 

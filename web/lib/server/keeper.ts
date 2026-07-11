@@ -15,7 +15,7 @@ import { getSettleStatus, startSettleJob } from "./settle";
  * is logged as a skip, not treated as a failure.
  */
 
-type RawPolicy = readonly [string, bigint, bigint, number, `0x${string}`, string, number];
+type RawPolicy = readonly [string, bigint, bigint, number, `0x${string}`, string, number, boolean];
 
 type DuePolicy = {
     id: number;

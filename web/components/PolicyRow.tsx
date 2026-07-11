@@ -16,6 +16,7 @@ export type Policy = {
   requestHash: `0x${string}`;
   flightRef: string;
   status: PolicyStatus;
+  premiumInFxrp: boolean;
 };
 
 type SettlePhase = "submitted" | "waiting_finalization" | "fetching_proof" | "ready" | "failed";
@@ -259,7 +260,10 @@ export function PolicyRow({ policy, rowGridClass, onSettled }: { policy: Policy;
           {meta ? `${meta.flightIata} · ${meta.date}` : `Policy #${policy.id}`}
         </Link>
         <span className="font-mono">{formatAmount(policy.coverAmount)} USDT0</span>
-        <span className="font-mono">{formatAmount(policy.premium)} USDT0</span>
+        <span className="font-mono">
+          {formatAmount(policy.premium)} USDT0
+          {policy.premiumInFxrp && <span className="ml-1 text-xs text-muted">(paid in FXRP)</span>}
+        </span>
         <span className="font-mono text-muted">{formatDate(policy.scheduledArrival)}</span>
         <span className="font-mono text-muted">#{policy.id}</span>
         <span className="flex items-center gap-2 md:justify-end">

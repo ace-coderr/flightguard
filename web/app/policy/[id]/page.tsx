@@ -14,7 +14,7 @@ import { findSettlementEvidence, type SettlementEvidence } from "@/lib/server/re
 // getLogs scan (see lib/server/receipts.ts) on every single receipt view.
 export const revalidate = 120;
 
-type RawPolicy = readonly [string, bigint, bigint, number, `0x${string}`, string, number];
+type RawPolicy = readonly [string, bigint, bigint, number, `0x${string}`, string, number, boolean];
 
 const getPolicy = cache(async (id: number) => {
   const publicClient = getPublicClient();
@@ -24,7 +24,7 @@ const getPolicy = cache(async (id: number) => {
       functionName: "policies",
       args: [BigInt(id)],
     })) as RawPolicy;
-    const [holder, coverAmount, premium, scheduledArrival, requestHash, flightRef, status] = raw;
+    const [holder, coverAmount, premium, scheduledArrival, requestHash, flightRef, status, premiumInFxrp] = raw;
     if (holder === "0x0000000000000000000000000000000000000000") return null;
     return {
       id,
@@ -35,6 +35,7 @@ const getPolicy = cache(async (id: number) => {
       requestHash,
       flightRef,
       status: status as PolicyStatus,
+      premiumInFxrp,
     };
   } catch {
     return null;
@@ -177,7 +178,9 @@ export default async function PolicyReceiptPage({ params }: { params: { id: stri
             {formatAmount(policy.coverAmount)} <span className="text-base text-white/50">USDT0</span>
           </div>
           <div className="mt-4 text-xs text-white/50">Premium</div>
-          <div className="font-mono text-lg font-medium">{formatAmount(policy.premium)} USDT0</div>
+          <div className="font-mono text-lg font-medium">
+            {formatAmount(policy.premium)} USDT0{policy.premiumInFxrp && <span className="text-white/50"> (paid in FXRP)</span>}
+          </div>
           <div className="mt-4 text-xs text-white/50">Scheduled arrival</div>
           <div className="font-mono text-lg font-medium">{formatDate(policy.scheduledArrival)}</div>
         </div>
