@@ -18,13 +18,13 @@ export function Nav() {
 
   return (
     <header className="sticky top-0 z-30 bg-canvas/80 backdrop-blur">
-      <div className="mx-auto grid max-w-6xl grid-cols-[1fr_auto_1fr] items-center gap-4 px-6 py-5">
-        <Link href="/" className="flex items-center gap-2 justify-self-start text-lg font-semibold tracking-tight">
+      <div className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-6 py-3 md:grid md:grid-cols-[1fr_auto_1fr] md:py-5">
+        <Link href="/" className="flex items-center gap-2 text-lg font-semibold tracking-tight md:justify-self-start">
           <span className="h-2.5 w-2.5 rounded-full bg-brand" aria-hidden />
           FlightGuard
         </Link>
 
-        <nav className="hidden items-center justify-self-center gap-8 rounded-full bg-white px-6 py-3 shadow-sm ring-1 ring-ink/5 md:flex">
+        <nav className="hidden items-center gap-8 rounded-full bg-white px-6 py-3 shadow-sm ring-1 ring-ink/5 md:flex md:justify-self-center">
           {links.map((link) => {
             const isActive = pathname === link.href;
             return (
@@ -43,7 +43,7 @@ export function Nav() {
           })}
         </nav>
 
-        <div className="flex items-center justify-self-end gap-3">
+        <div className="flex items-center gap-3 md:justify-self-end">
           <div className="hidden md:block">
             <ConnectWallet />
           </div>
