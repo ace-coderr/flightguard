@@ -1,7 +1,8 @@
 "use client";
 
 import { FormEvent, Suspense, useEffect, useMemo, useState } from "react";
-import { useSearchParams } from "next/navigation";
+import Link from "next/link";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useAccount, useReadContract, useWaitForTransactionReceipt, useWriteContract } from "wagmi";
 import { formatUnits, parseUnits } from "viem";
 import { flightGuardConfig, usdt0Config, fxrpConfig, MAX_COVER, PREMIUM_BPS, USDT0_DECIMALS } from "@/lib/contracts";
@@ -41,9 +42,13 @@ const primaryButtonClass =
 const darkButtonClass =
   "rounded-full bg-brand px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-brand-hover disabled:cursor-not-allowed disabled:opacity-50";
 
+const secondaryDarkButtonClass =
+  "rounded-full border border-white/20 px-4 py-2.5 text-sm font-semibold text-white/80 transition-colors hover:border-white/40 hover:text-white";
+
 const DEFAULT_DEEP_LINK_COVER_AMOUNT = "100";
 
 function CoverForm() {
+  const router = useRouter();
   const searchParams = useSearchParams();
   const { address, isConnected } = useAccount();
 
@@ -85,7 +90,12 @@ function CoverForm() {
     | readonly [bigint, bigint, bigint, bigint]
     | undefined) ?? [undefined, undefined, undefined, undefined];
 
-  const { writeContract: writeApprove, data: approveHash, isPending: isApprovePending } = useWriteContract();
+  const {
+    writeContract: writeApprove,
+    data: approveHash,
+    isPending: isApprovePending,
+    reset: resetApprove,
+  } = useWriteContract();
   const { isLoading: isApproveConfirming, isSuccess: isApproveConfirmed } = useWaitForTransactionReceipt({
     hash: approveHash,
   });
@@ -95,6 +105,7 @@ function CoverForm() {
     data: buyCoverHash,
     isPending: isBuyCoverPending,
     error: buyCoverError,
+    reset: resetBuyCover,
   } = useWriteContract();
   const { isLoading: isBuyCoverConfirming, isSuccess: isBuyCoverConfirmed } = useWaitForTransactionReceipt({
     hash: buyCoverHash,
@@ -244,6 +255,25 @@ function CoverForm() {
     else refetchUsdt0Allowance();
   }, [isApproveConfirmed, payWith, refetchFxrpAllowance, refetchUsdt0Allowance]);
 
+  // Gentle auto-redirect to My Policies once the buyCover tx is confirmed onchain -
+  // the "View in My Policies" button is available immediately for anyone who doesn't
+  // want to wait.
+  useEffect(() => {
+    if (!isBuyCoverConfirmed) return;
+    const timer = setTimeout(() => router.push("/policies"), 3000);
+    return () => clearTimeout(timer);
+  }, [isBuyCoverConfirmed, router]);
+
+  function handleBuyAnother() {
+    setQuote(null);
+    setQuoteError(null);
+    setFlightIata("");
+    setDate("");
+    setCoverAmountInput("");
+    resetApprove();
+    resetBuyCover();
+  }
+
   return (
     <div className="mx-auto max-w-6xl px-6 py-12">
       <div className="mb-10">
@@ -362,7 +392,43 @@ function CoverForm() {
             </div>
           )}
 
-          {quote && (
+          {quote && isBuyCoverConfirmed && (
+            <div className="flex flex-col gap-5 rounded-2xl bg-ink p-6 text-white sm:p-8">
+              <div className="flex items-center justify-between">
+                <h2 className="font-semibold">Cover active!</h2>
+                <span className="font-mono text-xs text-white/50">
+                  {quote.flightIata} · {quote.date}
+                </span>
+              </div>
+
+              <p className="text-sm text-white/70">Your policy is live onchain.</p>
+
+              <div className="rounded-lg bg-white/5 px-3 py-2 font-mono text-sm">
+                {quote.flightIata}
+                {quote.depIata && quote.arrIata ? ` · ${quote.depIata}→${quote.arrIata}` : ""}
+                {quote.arrTimeUtc ? ` · arrives ${formatUtcTime(quote.arrTimeUtc)}` : ""}
+              </div>
+
+              <dl className="grid grid-cols-2 gap-y-2 border-t border-white/10 pt-4 text-sm">
+                <dt className="text-white/50">Cover amount</dt>
+                <dd className="text-right font-mono">{formatAmount(quote.coverAmount)} USDT0</dd>
+                <dt className="text-white/50">Scheduled arrival by</dt>
+                <dd className="text-right font-mono">{formatDate(quote.scheduledArrival)}</dd>
+              </dl>
+
+              <div className="flex flex-col gap-3 border-t border-white/10 pt-5">
+                <Link href="/policies" className={`${darkButtonClass} text-center`}>
+                  View in My Policies →
+                </Link>
+                <button type="button" onClick={handleBuyAnother} className={secondaryDarkButtonClass}>
+                  Buy another
+                </button>
+                <p className="text-center text-xs text-white/40">Redirecting you to My Policies…</p>
+              </div>
+            </div>
+          )}
+
+          {quote && !isBuyCoverConfirmed && (
             <div className="flex flex-col gap-5 rounded-2xl bg-ink p-6 text-white sm:p-8">
               <div className="flex items-center justify-between">
                 <h2 className="font-semibold">Quote</h2>
@@ -459,15 +525,6 @@ function CoverForm() {
                     </button>
                   )}
                   {buyCoverError && <p className="text-sm text-brand">{buyCoverError.message}</p>}
-                  {isBuyCoverConfirmed && (
-                    <p className="text-sm text-white/80">
-                      Cover bought! View it on the{" "}
-                      <a href="/policies" className="text-brand underline">
-                        policies page
-                      </a>
-                      .
-                    </p>
-                  )}
                 </div>
               )}
             </div>

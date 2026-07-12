@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { formatUnits, parseUnits } from "viem";
 import { useAccount, useReadContract, useWaitForTransactionReceipt, useWriteContract } from "wagmi";
 import { flightGuardConfig, usdt0Config, USDT0_DECIMALS } from "@/lib/contracts";
@@ -93,10 +93,12 @@ export default function PoolPage() {
 
   const { writeContract: writeDeposit, data: depositHash, isPending: isDepositPending, error: depositError } =
     useWriteContract();
-  const { isLoading: isDepositConfirming } = useWaitForTransactionReceipt({
+  const { isLoading: isDepositConfirming, isSuccess: isDepositConfirmed } = useWaitForTransactionReceipt({
     hash: depositHash,
     query: { enabled: Boolean(depositHash) },
   });
+  const [lastDepositAmount, setLastDepositAmount] = useState<bigint | null>(null);
+  const [depositSuccessMessage, setDepositSuccessMessage] = useState<string | null>(null);
 
   const [withdrawInput, setWithdrawInput] = useState("");
   const withdrawShareAmount = useMemo(() => {
@@ -108,10 +110,12 @@ export default function PoolPage() {
   }, [withdrawInput]);
   const { writeContract: writeWithdraw, data: withdrawHash, isPending: isWithdrawPending, error: withdrawError } =
     useWriteContract();
-  const { isLoading: isWithdrawConfirming } = useWaitForTransactionReceipt({
+  const { isLoading: isWithdrawConfirming, isSuccess: isWithdrawConfirmed } = useWaitForTransactionReceipt({
     hash: withdrawHash,
     query: { enabled: Boolean(withdrawHash) },
   });
+  const [lastWithdrawAmount, setLastWithdrawAmount] = useState<bigint | null>(null);
+  const [withdrawSuccessMessage, setWithdrawSuccessMessage] = useState<string | null>(null);
 
   function handleApprove() {
     if (depositAmount <= 0n) return;
@@ -123,29 +127,39 @@ export default function PoolPage() {
 
   function handleDeposit() {
     if (depositAmount <= 0n) return;
-    writeDeposit(
-      { ...flightGuardConfig, functionName: "deposit", args: [depositAmount] },
-      {
-        onSuccess: () => {
-          setDepositInput("");
-          setTimeout(refetchAll, 2000);
-        },
-      }
-    );
+    setDepositSuccessMessage(null);
+    setLastDepositAmount(depositAmount);
+    writeDeposit({ ...flightGuardConfig, functionName: "deposit", args: [depositAmount] });
   }
 
   function handleWithdraw() {
     if (withdrawShareAmount <= 0n) return;
-    writeWithdraw(
-      { ...flightGuardConfig, functionName: "withdraw", args: [withdrawShareAmount] },
-      {
-        onSuccess: () => {
-          setWithdrawInput("");
-          setTimeout(refetchAll, 2000);
-        },
-      }
-    );
+    setWithdrawSuccessMessage(null);
+    setLastWithdrawAmount(withdrawShareAmount);
+    writeWithdraw({ ...flightGuardConfig, functionName: "withdraw", args: [withdrawShareAmount] });
   }
+
+  // Success confirmations are driven off the tx receipt (isSuccess), not submission -
+  // "confirmed" means it landed onchain, not just that the wallet accepted it.
+  useEffect(() => {
+    if (!isDepositConfirmed || lastDepositAmount === null) return;
+    setDepositSuccessMessage(`Deposited ${formatAmount(lastDepositAmount)} USDT0`);
+    setDepositInput("");
+    refetchAll();
+    const timer = setTimeout(() => setDepositSuccessMessage(null), 5000);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isDepositConfirmed]);
+
+  useEffect(() => {
+    if (!isWithdrawConfirmed || lastWithdrawAmount === null) return;
+    setWithdrawSuccessMessage(`Withdrew ${formatAmount(lastWithdrawAmount)} USDT0`);
+    setWithdrawInput("");
+    refetchAll();
+    const timer = setTimeout(() => setWithdrawSuccessMessage(null), 5000);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isWithdrawConfirmed]);
 
   const utilization = useMemo(() => {
     const balance = (poolBalance as bigint) ?? 0n;
@@ -238,6 +252,9 @@ export default function PoolPage() {
                 {isDepositPending || isDepositConfirming ? "Depositing..." : "Deposit"}
               </button>
             )}
+            {depositSuccessMessage && (
+              <p className="text-sm font-medium text-brand">{depositSuccessMessage}</p>
+            )}
             {depositError && <p className="text-sm text-brand">{depositError.message}</p>}
           </div>
 
@@ -268,6 +285,9 @@ export default function PoolPage() {
             >
               {isWithdrawPending || isWithdrawConfirming ? "Withdrawing..." : "Withdraw"}
             </button>
+            {withdrawSuccessMessage && (
+              <p className="text-sm font-medium text-brand">{withdrawSuccessMessage}</p>
+            )}
             {withdrawError && <p className="text-sm text-brand">{withdrawError.message}</p>}
           </div>
         </div>
