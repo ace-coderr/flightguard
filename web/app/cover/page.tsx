@@ -43,6 +43,7 @@ function CoverForm() {
   const [date, setDate] = useState("");
   const [coverAmountInput, setCoverAmountInput] = useState("");
   const [quote, setQuote] = useState<Quote | null>(null);
+  const isDeepLink = Boolean(searchParams.get("flight"));
   const [quoteError, setQuoteError] = useState<string | null>(null);
   const [isQuoting, setIsQuoting] = useState(false);
   const [payWith, setPayWith] = useState<PayWith>("USDT0");
@@ -153,20 +154,19 @@ function CoverForm() {
     void runQuote(flightIata, date, coverAmountInput);
   }
 
-  // Deep link from /radar ("Cover this route"): prefill flight + tomorrow's date and
-  // auto-run the quote so the user lands on a ready-to-buy quote. Runs once on mount;
-  // if the flight has no scheduled data yet, runQuote surfaces the normal inline error.
+  // Deep link from /radar ("Cover this route"): prefill the flight number only. We can't
+  // assume "tomorrow" is coverable - airlabs' free tier only ever exposes a flight's
+  // current/most-recent instance, not a future date's occurrence, so a flight radar just
+  // flagged as delayed (i.e. today's instance) always resolves to an already-passed
+  // arrival. Instead of auto-firing a quote that's guaranteed to fail, just prefill and let
+  // the user pick a date and validate for themselves via the normal "Get quote" flow.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     const flightParam = searchParams.get("flight");
-    const dateParam = searchParams.get("date");
-    if (!flightParam || !dateParam) return;
+    if (!flightParam) return;
 
-    const normalizedFlight = flightParam.trim().toUpperCase();
-    setFlightIata(normalizedFlight);
-    setDate(dateParam);
+    setFlightIata(flightParam.trim().toUpperCase());
     setCoverAmountInput(DEFAULT_DEEP_LINK_COVER_AMOUNT);
-    void runQuote(normalizedFlight, dateParam, DEFAULT_DEEP_LINK_COVER_AMOUNT);
   }, []);
 
   function handleApprove() {
@@ -245,6 +245,12 @@ function CoverForm() {
               className={`${inputClass} font-mono`}
             />
           </label>
+          {isDeepLink && !quote && !quoteError && (
+            <p className="text-xs text-muted">
+              Prefilled from Delay Radar. Pick the date you want to fly — we&apos;ll only let you buy once we can
+              confirm that flight&apos;s scheduled arrival with live data.
+            </p>
+          )}
           <label className="flex flex-col gap-1.5 text-sm text-muted">
             Cover amount (USDT0)
             <input
