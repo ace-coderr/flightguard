@@ -458,6 +458,22 @@ function CoverForm() {
                 </div>
               </div>
 
+              <div className="rounded-lg border border-brand/40 bg-brand/10 px-3 py-3 text-sm">
+                <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
+                  <dt className="text-white/60">Flight date:</dt>
+                  <dd className="text-right font-mono font-semibold text-white">{quote.date}</dd>
+                  <dt className="text-white/60">Scheduled arrival:</dt>
+                  <dd className="text-right font-mono font-semibold text-white">
+                    {formatDate(quote.scheduledArrival)}
+                    {quote.arrTimeUtc ? `, ${formatUtcTime(quote.arrTimeUtc)}` : ""}
+                  </dd>
+                </dl>
+                <p className="mt-2 text-xs text-white/60">
+                  Date and arrival are taken from live flight data for {quote.flightIata} — this is the flight
+                  you&apos;re covering.
+                </p>
+              </div>
+
               <div>
                 <div className="mb-2 flex items-center justify-between">
                   <span className="text-xs text-white/50">Pay premium in</span>
