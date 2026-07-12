@@ -53,7 +53,6 @@ function CoverForm() {
   const { address, isConnected } = useAccount();
 
   const [flightIata, setFlightIata] = useState("");
-  const [date, setDate] = useState("");
   const [coverAmountInput, setCoverAmountInput] = useState("");
   const [quote, setQuote] = useState<Quote | null>(null);
   const isDeepLink = Boolean(searchParams.get("flight"));
@@ -137,7 +136,7 @@ function CoverForm() {
     return quote.coverAmount > freeLiquidity;
   }, [quote, freeLiquidity]);
 
-  async function runQuote(flightIataValue: string, dateValue: string, coverAmountValue: string) {
+  async function runQuote(flightIataValue: string, coverAmountValue: string) {
     setQuoteError(null);
     setQuote(null);
 
@@ -158,7 +157,7 @@ function CoverForm() {
       const res = await fetch("/api/flight-request", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ flightIata: flightIataValue, date: dateValue }),
+        body: JSON.stringify({ flightIata: flightIataValue }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -187,15 +186,14 @@ function CoverForm() {
 
   function handleQuote(e: FormEvent) {
     e.preventDefault();
-    void runQuote(flightIata, date, coverAmountInput);
+    void runQuote(flightIata, coverAmountInput);
   }
 
   async function handleCoverableClick(flight: CoverableFlight) {
     setFlightIata(flight.flightIata);
-    setDate(flight.date);
     const coverAmount = coverAmountInput || DEFAULT_DEEP_LINK_COVER_AMOUNT;
     setCoverAmountInput(coverAmount);
-    await runQuote(flight.flightIata, flight.date, coverAmount);
+    await runQuote(flight.flightIata, coverAmount);
   }
 
   // Suggested "known good" flight numbers so a judge with no idea which real-world flights
@@ -218,14 +216,14 @@ function CoverForm() {
     };
   }, []);
 
-  // Deep link from /radar ("Cover this route"): prefill the flight number (and date, if the
-  // link carries one) only. We can't assume "tomorrow" is coverable - airlabs' free tier only
-  // ever exposes a flight's current/most-recent instance, not a future date's occurrence, so a
-  // flight radar just flagged as delayed (i.e. today's instance) always resolves to an
-  // already-passed arrival. Instead of auto-firing a quote that's guaranteed to fail, just
-  // prefill and let the user pick a date and validate for themselves via the normal "Get quote"
-  // flow. Guarded by a ref (not just the empty dep array) so this can never fire a second time
-  // and stomp a date the user has since typed in by hand.
+  // Deep link from /radar ("Cover this route"): prefill the flight number only. We can't
+  // assume the flight is currently coverable - airlabs' free tier only ever exposes a
+  // flight's current/most-recent instance, so a flight radar just flagged as delayed (i.e.
+  // today's instance) may already have landed. Instead of auto-firing a quote that's
+  // guaranteed to fail, just prefill and let the user hit "Get quote" themselves, which
+  // looks up the flight's real next scheduled instance live. Guarded by a ref (not just the
+  // empty dep array) so this can never fire a second time and stomp a flight number the
+  // user has since typed in by hand.
   const didPrefillFromUrl = useRef(false);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
@@ -233,13 +231,9 @@ function CoverForm() {
     didPrefillFromUrl.current = true;
 
     const flightParam = searchParams.get("flight");
-    const dateParam = searchParams.get("date");
     if (flightParam) {
       setFlightIata(flightParam.trim().toUpperCase());
       setCoverAmountInput(DEFAULT_DEEP_LINK_COVER_AMOUNT);
-    }
-    if (dateParam) {
-      setDate(dateParam);
     }
   }, []);
 
@@ -293,7 +287,6 @@ function CoverForm() {
     setQuote(null);
     setQuoteError(null);
     setFlightIata("");
-    setDate("");
     setCoverAmountInput("");
     resetApprove();
     resetBuyCover();
@@ -309,7 +302,8 @@ function CoverForm() {
           Flight-delay cover
         </h1>
         <p className="mt-3 max-w-xl text-sm text-muted">
-          Enter a flight, date, and cover amount to get an instant quote.
+          Enter a flight number and cover amount to get an instant quote — we look up that
+          flight&apos;s real next scheduled arrival for you.
         </p>
 
         {coverableFlights.length > 0 && (
@@ -352,20 +346,10 @@ function CoverForm() {
               className={`${inputClass} font-mono uppercase placeholder:normal-case`}
             />
           </label>
-          <label className="flex flex-col gap-1.5 text-sm text-muted">
-            Flight date
-            <input
-              required
-              type="date"
-              value={date}
-              onChange={(e) => setDate(e.target.value)}
-              className={`${inputClass} font-mono`}
-            />
-          </label>
           {isDeepLink && !quote && !quoteError && (
             <p className="text-xs text-muted">
-              Prefilled from Delay Radar. Pick the date you want to fly — we&apos;ll only let you buy once we can
-              confirm that flight&apos;s scheduled arrival with live data.
+              Prefilled from Delay Radar. Hit &quot;Get quote&quot; and we&apos;ll look up that flight&apos;s real next
+              scheduled arrival with live data.
             </p>
           )}
           <label className="flex flex-col gap-1.5 text-sm text-muted">

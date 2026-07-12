@@ -6,7 +6,7 @@ import {
     fetchFlight,
     scheduledArrivalFromFlight,
     utcDateOnly,
-    validateFlightInput,
+    validateFlightIata,
 } from "@/lib/server/flightRequest";
 
 export async function POST(req: NextRequest) {
@@ -15,20 +15,23 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: "Server is missing FLIGHT_API_KEY" }, { status: 500 });
     }
 
-    let payload: { flightIata?: unknown; date?: unknown };
+    let payload: { flightIata?: unknown };
     try {
         payload = await req.json();
     } catch {
         return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
     }
 
-    if (typeof payload.flightIata !== "string" || typeof payload.date !== "string") {
-        return NextResponse.json({ error: "flightIata and date are required" }, { status: 400 });
+    if (typeof payload.flightIata !== "string") {
+        return NextResponse.json({ error: "flightIata is required" }, { status: 400 });
     }
 
+    // No date input from the client anymore - the date-lock and flightRef are always
+    // derived below from the flight's real scheduled departure (from airlabs), never from
+    // user input.
     let flightIata: string;
     try {
-        ({ flightIata } = validateFlightInput(payload.flightIata, payload.date));
+        flightIata = validateFlightIata(payload.flightIata);
     } catch (err) {
         return NextResponse.json({ error: (err as Error).message }, { status: 400 });
     }
@@ -38,7 +41,9 @@ export async function POST(req: NextRequest) {
     const flight = await fetchFlight(flightIata, apiKey);
     if (!flight) {
         return NextResponse.json(
-            { error: `Flight ${flightIata} not found. Check the flight number and try again.` },
+            {
+                error: `No upcoming flight found for ${flightIata}. Check the flight number and try again, or try one of the coverable flights above.`,
+            },
             { status: 404 }
         );
     }
@@ -46,14 +51,16 @@ export async function POST(req: NextRequest) {
     const scheduledArrival = scheduledArrivalFromFlight(flight);
     if (scheduledArrival === null) {
         return NextResponse.json(
-            { error: `${flightIata} has no scheduled arrival time yet. Try again closer to departure.` },
+            {
+                error: `No upcoming flight found for ${flightIata} — it has no scheduled arrival time yet. Try again closer to departure.`,
+            },
             { status: 422 }
         );
     }
     if (scheduledArrival <= Math.floor(Date.now() / 1000)) {
         return NextResponse.json(
             {
-                error: `${flightIata} has already arrived — cover can only be bought before a flight lands. Try one of the coverable flights above, or any upcoming flight.`,
+                error: `No upcoming flight found for ${flightIata} — its next known instance has already arrived. Try one of the coverable flights above, or check back later.`,
             },
             { status: 400 }
         );

@@ -119,11 +119,16 @@ export function resolveFlightRequestBody(
 const IATA_FLIGHT_NUMBER_RE = /^[A-Z0-9]{2,3}[0-9]{1,4}$/;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
-export function validateFlightInput(flightIata: string, date: string) {
+export function validateFlightIata(flightIata: string): string {
     const normalizedIata = flightIata.trim().toUpperCase();
     if (!IATA_FLIGHT_NUMBER_RE.test(normalizedIata)) {
         throw new Error("Invalid flight number. Expected IATA format, e.g. BA75.");
     }
+    return normalizedIata;
+}
+
+export function validateFlightInput(flightIata: string, date: string) {
+    const normalizedIata = validateFlightIata(flightIata);
     if (!DATE_RE.test(date)) {
         throw new Error("Invalid date. Expected YYYY-MM-DD.");
     }
