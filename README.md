@@ -92,6 +92,21 @@ Keeper / anyone ──settle(proof)──┘
 
 ---
 
+## How to test (for judges)
+
+Everything needed to test is free from the official Flare faucet at https://faucet.flare.network — request **C2FLR**, **USDT0**, and **FXRP** for Coston2.
+
+1. Open https://flightguard.vercel.app and connect a wallet on **Coston2** (chain 114).
+2. **Buy Cover** — cover can only be bought for a flight that **hasn't landed yet** (you insure before the outcome is known). The page shows a few **currently coverable flights** you can click to auto-fill a working quote. Typing a flight that has already arrived returns a clear "already arrived" message — that's expected behavior, not an error.
+3. **My Policies** — see your cover and its status. Policy **G58846** is a real settled example: a flight delayed ~292 minutes that **paid out automatically**.
+4. **Settlement receipts** — every settled policy has a public page (`/policy/[id]`, no wallet needed) linking the FDC voting round and settle transaction on the block explorer.
+5. **Pool** — deposit USDT0 to back policies and earn premiums; withdraw free liquidity.
+6. **Radar** — live flights delayed 2+ hours right now, as proof that these delays happen constantly.
+
+Note: settlement runs against the **live FDC verifier** — a real attestation takes ~2–3 minutes (a voting round must finalize). The keeper settles delayed policies automatically; a manual "Settle" is also available.
+
+---
+
 ## Onchain references (Coston2)
 
 - **FlightGuard contract:** [`0xee52694D2C324C03e8AC4490C9675b3bFdFe6A63`](https://coston2-explorer.flare.network/address/0xee52694D2C324C03e8AC4490C9675b3bFdFe6A63)

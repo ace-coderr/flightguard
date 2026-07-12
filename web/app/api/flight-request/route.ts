@@ -51,7 +51,12 @@ export async function POST(req: NextRequest) {
         );
     }
     if (scheduledArrival <= Math.floor(Date.now() / 1000)) {
-        return NextResponse.json({ error: `${flightIata}'s scheduled arrival has already passed.` }, { status: 400 });
+        return NextResponse.json(
+            {
+                error: `${flightIata} has already arrived — cover can only be bought before a flight lands. Try one of the coverable flights above, or any upcoming flight.`,
+            },
+            { status: 400 }
+        );
     }
 
     // The date-lock and flightRef key off the flight's REAL departure date (from airlabs),

@@ -10,6 +10,14 @@ import { ExplorerLink } from "@/components/ExplorerLink";
 
 type PayWith = "USDT0" | "FXRP";
 
+type CoverableFlight = {
+  flightIata: string;
+  depIata: string | null;
+  arrIata: string | null;
+  date: string;
+  scheduledArrival: number;
+};
+
 type Quote = {
   flightIata: string;
   date: string;
@@ -47,6 +55,8 @@ function CoverForm() {
   const [quoteError, setQuoteError] = useState<string | null>(null);
   const [isQuoting, setIsQuoting] = useState(false);
   const [payWith, setPayWith] = useState<PayWith>("USDT0");
+  const [coverableFlights, setCoverableFlights] = useState<CoverableFlight[]>([]);
+  const [coverableLoading, setCoverableLoading] = useState(true);
 
   const { data: usdt0Allowance, refetch: refetchUsdt0Allowance } = useReadContract({
     ...usdt0Config,
@@ -154,6 +164,34 @@ function CoverForm() {
     void runQuote(flightIata, date, coverAmountInput);
   }
 
+  async function handleCoverableClick(flight: CoverableFlight) {
+    setFlightIata(flight.flightIata);
+    setDate(flight.date);
+    const coverAmount = coverAmountInput || DEFAULT_DEEP_LINK_COVER_AMOUNT;
+    setCoverAmountInput(coverAmount);
+    await runQuote(flight.flightIata, flight.date, coverAmount);
+  }
+
+  // Suggested "known good" flight numbers so a judge with no idea which real-world flights
+  // are currently airborne always has a one-click working path to a quote.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/coverable-flights");
+        const data = await res.json();
+        if (!cancelled && res.ok) setCoverableFlights(data.flights ?? []);
+      } catch {
+        // ignore - falls back to the "try again shortly" hint
+      } finally {
+        if (!cancelled) setCoverableLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   // Deep link from /radar ("Cover this route"): prefill the flight number only. We can't
   // assume "tomorrow" is coverable - airlabs' free tier only ever exposes a flight's
   // current/most-recent instance, not a future date's occurrence, so a flight radar just
@@ -218,6 +256,30 @@ function CoverForm() {
         <p className="mt-3 max-w-xl text-sm text-muted">
           Enter a flight, date, and cover amount to get an instant quote.
         </p>
+
+        {coverableFlights.length > 0 && (
+          <div className="mt-6 flex flex-wrap items-center gap-2">
+            <span className="mr-1 text-xs font-semibold uppercase tracking-widest text-muted">
+              Try a coverable flight
+            </span>
+            {coverableFlights.map((flight) => (
+              <button
+                key={flight.flightIata}
+                type="button"
+                onClick={() => void handleCoverableClick(flight)}
+                className="rounded-full border border-ink/15 bg-white px-3 py-1.5 font-mono text-xs font-semibold text-ink transition-colors hover:border-ink hover:bg-ink hover:text-white"
+              >
+                {flight.flightIata}
+                {flight.depIata && flight.arrIata ? ` · ${flight.depIata}→${flight.arrIata}` : ""}
+              </button>
+            ))}
+          </div>
+        )}
+        {!coverableLoading && coverableFlights.length === 0 && (
+          <p className="mt-6 text-xs text-muted">
+            Flights refresh constantly — try again shortly, or enter any flight that hasn&apos;t landed yet.
+          </p>
+        )}
       </div>
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-[2fr_1fr]">
