@@ -271,15 +271,24 @@ export function PolicyRow({ policy, rowGridClass, onSettled }: { policy: Policy;
         </span>
       </div>
 
-      {isSettleEligible && !inProgress && (
+      {policy.status === PolicyStatus.Active && !inProgress && (
         <div className="flex flex-wrap items-center justify-between gap-3 border-t border-ink/10 pt-4">
           <span className="flex items-center gap-2 font-mono text-xs text-muted">
-            <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-brand" aria-hidden />
-            Auto-settlement in progress{currentRound ? ` · round ${currentRound.roundId}` : ""}
+            <span
+              className={`h-1.5 w-1.5 shrink-0 rounded-full bg-brand ${isSettleEligible ? "animate-pulse" : ""}`}
+              aria-hidden
+            />
+            {isSettleEligible
+              ? `Auto-settlement in progress${currentRound ? ` · round ${currentRound.roundId}` : ""}`
+              : "Awaiting scheduled arrival"}
           </span>
           {meta && (
-            <button onClick={handleSettleClick} className={smallButtonClass}>
-              Settle now
+            <button
+              onClick={handleSettleClick}
+              disabled={!isSettleEligible}
+              className={smallButtonClass}
+            >
+              {isSettleEligible ? "Settle now" : "Settleable after scheduled arrival"}
             </button>
           )}
         </div>

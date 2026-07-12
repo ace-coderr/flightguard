@@ -108,6 +108,21 @@ export default function PoolPage() {
       return 0n;
     }
   }, [withdrawInput]);
+
+  // Live cap on what's actually withdrawable right now: withdraw() converts shares to an
+  // amount via poolBalance/totalShares and requires that amount <= freeLiquidity (FlightGuard.sol),
+  // so the share-side ceiling is free liquidity re-expressed in shares, capped at what the
+  // user actually owns.
+  const maxWithdrawableShares = useMemo(() => {
+    const balance = (poolBalance as bigint) ?? 0n;
+    const total = (totalShares as bigint) ?? 0n;
+    const owned = (userShares as bigint) ?? 0n;
+    const free = (freeLiquidity as bigint) ?? 0n;
+    if (balance === 0n || total === 0n) return 0n;
+    const freeAsShares = (free * total) / balance;
+    return freeAsShares < owned ? freeAsShares : owned;
+  }, [poolBalance, totalShares, userShares, freeLiquidity]);
+  const exceedsWithdrawable = withdrawShareAmount > maxWithdrawableShares;
   const { writeContract: writeWithdraw, data: withdrawHash, isPending: isWithdrawPending, error: withdrawError } =
     useWriteContract();
   const { isLoading: isWithdrawConfirming, isSuccess: isWithdrawConfirmed } = useWaitForTransactionReceipt({
@@ -272,19 +287,27 @@ export default function PoolPage() {
               />
               <button
                 type="button"
-                onClick={() => setWithdrawInput(formatUnits((userShares as bigint) ?? 0n, USDT0_DECIMALS))}
+                onClick={() => setWithdrawInput(formatUnits(maxWithdrawableShares, USDT0_DECIMALS))}
                 className="rounded-lg border border-ink/15 px-3 py-2 text-sm text-muted transition-colors hover:border-ink/30 hover:text-ink"
               >
                 Max
               </button>
             </div>
+            <span className="text-xs text-muted">
+              {formatShares(maxWithdrawableShares)} shares withdrawable right now.
+            </span>
             <button
               onClick={handleWithdraw}
-              disabled={withdrawShareAmount <= 0n || isWithdrawPending || isWithdrawConfirming}
+              disabled={withdrawShareAmount <= 0n || isWithdrawPending || isWithdrawConfirming || exceedsWithdrawable}
               className={primaryButtonClass}
             >
               {isWithdrawPending || isWithdrawConfirming ? "Withdrawing..." : "Withdraw"}
             </button>
+            {exceedsWithdrawable && withdrawShareAmount > 0n && (
+              <p className="text-sm text-brand">
+                Only {formatShares(maxWithdrawableShares)} withdrawable now — the rest is backing active policies.
+              </p>
+            )}
             {withdrawSuccessMessage && (
               <p className="text-sm font-medium text-brand">{withdrawSuccessMessage}</p>
             )}

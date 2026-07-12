@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, Suspense, useEffect, useMemo, useState } from "react";
+import { FormEvent, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useAccount, useReadContract, useWaitForTransactionReceipt, useWriteContract } from "wagmi";
@@ -218,19 +218,29 @@ function CoverForm() {
     };
   }, []);
 
-  // Deep link from /radar ("Cover this route"): prefill the flight number only. We can't
-  // assume "tomorrow" is coverable - airlabs' free tier only ever exposes a flight's
-  // current/most-recent instance, not a future date's occurrence, so a flight radar just
-  // flagged as delayed (i.e. today's instance) always resolves to an already-passed
-  // arrival. Instead of auto-firing a quote that's guaranteed to fail, just prefill and let
-  // the user pick a date and validate for themselves via the normal "Get quote" flow.
+  // Deep link from /radar ("Cover this route"): prefill the flight number (and date, if the
+  // link carries one) only. We can't assume "tomorrow" is coverable - airlabs' free tier only
+  // ever exposes a flight's current/most-recent instance, not a future date's occurrence, so a
+  // flight radar just flagged as delayed (i.e. today's instance) always resolves to an
+  // already-passed arrival. Instead of auto-firing a quote that's guaranteed to fail, just
+  // prefill and let the user pick a date and validate for themselves via the normal "Get quote"
+  // flow. Guarded by a ref (not just the empty dep array) so this can never fire a second time
+  // and stomp a date the user has since typed in by hand.
+  const didPrefillFromUrl = useRef(false);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
-    const flightParam = searchParams.get("flight");
-    if (!flightParam) return;
+    if (didPrefillFromUrl.current) return;
+    didPrefillFromUrl.current = true;
 
-    setFlightIata(flightParam.trim().toUpperCase());
-    setCoverAmountInput(DEFAULT_DEEP_LINK_COVER_AMOUNT);
+    const flightParam = searchParams.get("flight");
+    const dateParam = searchParams.get("date");
+    if (flightParam) {
+      setFlightIata(flightParam.trim().toUpperCase());
+      setCoverAmountInput(DEFAULT_DEEP_LINK_COVER_AMOUNT);
+    }
+    if (dateParam) {
+      setDate(dateParam);
+    }
   }, []);
 
   function handleApprove() {
