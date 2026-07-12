@@ -447,6 +447,49 @@ describe("FlightGuard", () => {
         });
     });
 
+    describe("buyCover vs buyCoverWithFXRP requestHash parity", () => {
+        // Regression for a bug where scripts/flightguard/buyCoverWithFXRP.ts computed a
+        // throwaway requestHash unrelated to the flight request, instead of reusing
+        // buildFlightRequestBody/computeRequestHash like buyCover's callers do - leaving
+        // FXRP-bought policies permanently unsettleable ("requestHash matches neither
+        // current nor legacy scheme"). Both paths must hash the same (url, headers,
+        // queryParams, postProcessJq, abiSignature) tuple for the same flight+date, and
+        // both must settle off that one requestHash.
+        it("computes an identical requestHash for the same flight+date on both paths, and both settle", async () => {
+            const { flightGuard, backer, traveler, token } = await loadFixture(deployFixture);
+            await flightGuard.connect(backer).deposit(ethers.parseUnits("200", 6));
+
+            const coverAmount = ethers.parseUnits("40", 6);
+            const scheduledArrival = (await time.latest()) + 3600;
+            const requestHash = computeRequestHash(); // same REQUEST (same flight+date) for both paths
+
+            await flightGuard.connect(traveler).buyCover(coverAmount, scheduledArrival, requestHash, FLIGHT_REF);
+            const usdt0PolicyId = (await flightGuard.policyCount()) - 1n;
+
+            await flightGuard
+                .connect(traveler)
+                .buyCoverWithFXRP(coverAmount, scheduledArrival, requestHash, FLIGHT_REF);
+            const fxrpPolicyId = (await flightGuard.policyCount()) - 1n;
+
+            expect((await flightGuard.policies(usdt0PolicyId)).requestHash).to.equal(
+                (await flightGuard.policies(fxrpPolicyId)).requestHash
+            );
+
+            await time.increaseTo(scheduledArrival);
+            const proof = buildProof({ flightStatus: "cancelled", delayMinutes: 0 });
+
+            await expect(flightGuard.settle(usdt0PolicyId, proof)).to.changeTokenBalance(
+                token,
+                traveler,
+                coverAmount
+            );
+            await expect(flightGuard.settle(fxrpPolicyId, proof)).to.changeTokenBalance(token, traveler, coverAmount);
+
+            expect((await flightGuard.policies(usdt0PolicyId)).status).to.equal(1n); // PaidOut
+            expect((await flightGuard.policies(fxrpPolicyId)).status).to.equal(1n); // PaidOut
+        });
+    });
+
     describe("settle", () => {
         it("pays out when delayMinutes >= DELAY_THRESHOLD_MIN", async () => {
             const { flightGuard, token, backer, traveler } = await loadFixture(deployFixture);

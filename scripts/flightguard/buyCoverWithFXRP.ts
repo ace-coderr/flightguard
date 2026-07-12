@@ -1,5 +1,6 @@
 import { flightGuardAddress, usdt0Address, fxrpAddress } from "./config";
 import { FlightGuardInstance, MockUSDT0Instance } from "../../typechain-types";
+import { buildFlightRequestBody, computeRequestHash } from "../fdc-attest-flight";
 
 const FlightGuard = artifacts.require("FlightGuard");
 // MockUSDT0's ABI is a standard ERC20 - reused here (as demo.ts/buyTestPolicy.ts already
@@ -56,10 +57,13 @@ async function main() {
 
     const scheduledArrival = Math.floor(Date.now() / 1000) + scheduledArrivalDelaySec;
     const flightRef = `${flightIata}|${flightDate}`;
-    // requestHash doesn't need to resolve to a real settleable proof for this check - it
-    // only needs to be a plausible bytes32, since this script only proves the FTSO
-    // read + FXRP transfer, not settlement.
-    const requestHash = web3.utils.keccak256(`fxrp-live-check-${Date.now()}`);
+    // Must be computed the same way buyCover's scripts do (buildFlightRequestBody +
+    // computeRequestHash from fdc-attest-flight.ts) - settle()/the keeper recompute this
+    // same hash from the FDC proof's requestBody, so a placeholder value here would leave
+    // the resulting policy permanently unsettleable ("requestHash matches neither current
+    // nor legacy scheme").
+    const requestBody = buildFlightRequestBody(flightIata, flightDate);
+    const requestHash = computeRequestHash(requestBody);
 
     const fxrpBalanceBefore = BigInt((await fxrp.balanceOf(account)).toString());
     const contractFxrpBefore = BigInt((await fxrp.balanceOf(flightGuard.address)).toString());
