@@ -56,7 +56,7 @@ export default async function RadarPage() {
           Live
         </span>
         <div className="mt-4 flex flex-wrap items-center justify-between gap-4">
-          <h1 className="text-balance font-display text-5xl uppercase leading-[0.95] tracking-tight sm:text-6xl">
+          <h1 className="text-balance font-display text-4xl uppercase leading-[0.95] tracking-tight sm:text-6xl">
             Delay radar
           </h1>
           <Link

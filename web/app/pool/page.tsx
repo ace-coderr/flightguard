@@ -174,7 +174,7 @@ export default function PoolPage() {
         <span className="inline-flex rounded-full border border-ink/10 bg-white px-3 py-1 font-mono text-xs font-semibold uppercase tracking-widest text-muted">
           Pool
         </span>
-        <h1 className="mt-4 text-balance font-display text-5xl uppercase leading-[0.95] tracking-tight sm:text-6xl">
+        <h1 className="mt-4 text-balance font-display text-4xl uppercase leading-[0.95] tracking-tight sm:text-6xl">
           The pool
         </h1>
         <p className="mt-3 max-w-xl text-sm text-muted">
@@ -185,7 +185,7 @@ export default function PoolPage() {
       <div className="flex flex-col gap-6">
         <div className="rounded-2xl bg-ink p-6 text-white sm:p-8">
           <div className="text-xs text-white/50">Pool balance</div>
-          <div className="font-mono text-5xl font-semibold">
+          <div className="font-mono text-3xl font-semibold sm:text-5xl">
             {formatAmount(poolBalance as bigint)} <span className="text-lg text-white/50">USDT0</span>
           </div>
           {isConnected && (

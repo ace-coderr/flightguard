@@ -160,7 +160,7 @@ export default async function PolicyReceiptPage({ params }: { params: { id: stri
           Settlement receipt
         </span>
         <div className="mt-4 flex flex-wrap items-center justify-between gap-4">
-          <h1 className="text-balance font-display text-5xl uppercase leading-[0.95] tracking-tight sm:text-6xl">
+          <h1 className="text-balance font-display text-4xl uppercase leading-[0.95] tracking-tight sm:text-6xl">
             {meta ? meta.flightIata : `Policy #${policy.id}`}
           </h1>
           <StatusChip status={policy.status} />
@@ -174,7 +174,7 @@ export default async function PolicyReceiptPage({ params }: { params: { id: stri
       <div className="mb-8 grid grid-cols-1 gap-4 sm:grid-cols-2">
         <div className="rounded-2xl bg-ink p-6 text-white sm:p-8">
           <div className="text-xs text-white/50">Cover</div>
-          <div className="font-mono text-4xl font-semibold">
+          <div className="font-mono text-3xl font-semibold sm:text-4xl">
             {formatAmount(policy.coverAmount)} <span className="text-base text-white/50">USDT0</span>
           </div>
           <div className="mt-4 text-xs text-white/50">Premium</div>

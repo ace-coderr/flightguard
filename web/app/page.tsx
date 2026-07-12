@@ -41,7 +41,7 @@ export default function Home() {
             <span className="inline-flex rounded-full border border-brand/30 bg-white px-3 py-1 font-mono text-xs font-semibold uppercase tracking-widest text-brand">
               FDC · FTSO · COSTON2
             </span>
-            <h1 className="text-balance font-display text-6xl uppercase leading-[0.9] tracking-tight sm:text-7xl lg:text-8xl">
+            <h1 className="text-balance font-display text-4xl uppercase leading-[0.9] tracking-tight sm:text-7xl lg:text-8xl">
               Insurance that pays itself out.
             </h1>
             <p className="max-w-md text-balance text-lg text-muted">
@@ -69,9 +69,9 @@ export default function Home() {
             </p>
           </div>
 
-          <div className="relative mx-auto h-[520px] w-full max-w-lg sm:h-[600px] lg:h-[660px]">
+          <div className="relative mx-auto w-full max-w-lg md:h-[520px] lg:h-[660px]">
             <svg
-              className="pointer-events-none absolute inset-0 h-full w-full"
+              className="pointer-events-none absolute inset-0 hidden h-full w-full md:block"
               viewBox="0 0 420 520"
               fill="none"
               aria-hidden
@@ -90,21 +90,21 @@ export default function Home() {
               <circle cx="388" cy="42" r="5" fill="#E62058" />
             </svg>
 
-            <div className="absolute -top-3 right-4 z-30 inline-flex animate-fade-rise items-center gap-2 rounded-full bg-white px-3 py-1.5 font-mono text-[11px] font-semibold uppercase tracking-widest text-muted shadow-sm ring-1 ring-ink/5 [animation-delay:450ms] motion-reduce:animate-none sm:right-10">
+            <div className="z-30 mb-4 inline-flex animate-fade-rise items-center gap-2 rounded-full bg-white px-3 py-1.5 font-mono text-[11px] font-semibold uppercase tracking-widest text-muted shadow-sm ring-1 ring-ink/5 [animation-delay:450ms] motion-reduce:animate-none md:absolute md:-top-3 md:right-4 md:mb-0 lg:right-10">
               <span className="h-1.5 w-1.5 rounded-full bg-brand" aria-hidden />
               FDC proof · Round 1391476
             </div>
 
-            <div className="absolute left-1/2 top-1/2 w-full min-w-[420px] -translate-x-1/2 -translate-y-1/2">
+            <div className="flex flex-col gap-4 md:absolute md:left-1/2 md:top-1/2 md:block md:w-full md:min-w-[420px] md:-translate-x-1/2 md:-translate-y-1/2">
               <div className="relative">
-                <div className="absolute left-full top-full min-w-[340px] -translate-x-[9%] -translate-y-[12%] rotate-3">
-                  <div className="animate-fade-rise rounded-2xl bg-ink p-8 text-white shadow-xl [animation-delay:200ms] motion-reduce:animate-none">
+                <div className="md:absolute md:left-full md:top-full md:min-w-[340px] md:-translate-x-[9%] md:-translate-y-[12%] md:rotate-3">
+                  <div className="animate-fade-rise rounded-2xl bg-ink p-6 text-white shadow-xl [animation-delay:200ms] motion-reduce:animate-none sm:p-8">
                     <div className="flex items-center justify-between font-mono text-xs uppercase tracking-widest text-white/40">
                       <span>Settled</span>
                       <span className="text-emerald-400">● Paid</span>
                     </div>
-                    <div className="mt-6 font-mono text-4xl font-bold">AF128</div>
-                    <div className="mt-2 font-mono text-2xl font-semibold text-brand">Delayed +148 min</div>
+                    <div className="mt-6 font-mono text-3xl font-bold sm:text-4xl">AF128</div>
+                    <div className="mt-2 font-mono text-xl font-semibold text-brand sm:text-2xl">Delayed +148 min</div>
                     <div className="mt-6 inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border border-white/15 px-3 py-1.5 font-mono text-[10px] uppercase tracking-wide text-white/70">
                       <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-400" aria-hidden />
                       Cover 50 → Paid out
@@ -112,8 +112,8 @@ export default function Home() {
                   </div>
                 </div>
 
-                <div className="-rotate-2">
-                  <div className="animate-fade-rise rounded-2xl bg-ink p-8 text-white shadow-2xl motion-reduce:animate-none">
+                <div className="md:-rotate-2">
+                  <div className="animate-fade-rise rounded-2xl bg-ink p-6 text-white shadow-2xl motion-reduce:animate-none sm:p-8">
                     <div className="flex items-center justify-between font-mono text-xs uppercase tracking-widest text-white/50">
                       <span>Live · Sample</span>
                       <span className="flex items-center gap-1.5">
@@ -122,10 +122,10 @@ export default function Home() {
                       </span>
                     </div>
                     <div className="mt-8 flex items-baseline justify-between font-mono">
-                      <span className="text-4xl font-bold">BA75</span>
+                      <span className="text-3xl font-bold sm:text-4xl">BA75</span>
                       <span className="text-sm text-white/50">LHR → LOS</span>
                     </div>
-                    <div className="mt-3 font-mono text-2xl font-semibold text-brand">LANDED +7 MIN</div>
+                    <div className="mt-3 font-mono text-xl font-semibold text-brand sm:text-2xl">LANDED +7 MIN</div>
                     <div className="mt-8 inline-flex rounded-full border border-white/15 px-4 py-2 font-mono text-xs uppercase tracking-wide text-white/70">
                       Cover 2 USDT0 · No payout
                     </div>
@@ -141,7 +141,7 @@ export default function Home() {
         <span className="inline-flex rounded-full border border-ink/10 bg-white px-3 py-1 font-mono text-xs font-semibold uppercase tracking-widest text-muted">
           Process
         </span>
-        <h2 className="mt-4 max-w-2xl text-balance font-display text-4xl uppercase leading-[0.95] tracking-tight sm:text-5xl">
+        <h2 className="mt-4 max-w-2xl text-balance font-display text-3xl uppercase leading-[0.95] tracking-tight sm:text-5xl">
           How FlightGuard works
         </h2>
         <div className="mt-10 grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-4">
@@ -162,7 +162,7 @@ export default function Home() {
               <span className="inline-flex rounded-full border border-white/15 px-3 py-1 font-mono text-xs font-semibold uppercase tracking-widest text-brand">
                 The mechanic
               </span>
-              <h2 className="mt-5 text-balance font-display text-5xl uppercase leading-[0.9] tracking-tight sm:text-6xl">
+              <h2 className="mt-5 text-balance font-display text-3xl uppercase leading-[0.9] tracking-tight sm:text-6xl">
                 This is not a claim form.
               </h2>
               <p className="mt-6 max-w-xl text-balance text-lg text-white/60">
@@ -197,10 +197,10 @@ export default function Home() {
       </section>
 
       <section className="mx-auto w-full max-w-6xl px-6 py-20">
-        <div className="rounded-3xl border border-ink/10 bg-white p-10">
+        <div className="rounded-3xl border border-ink/10 bg-white p-6 sm:p-10">
           <div className="grid grid-cols-1 items-center gap-8 lg:grid-cols-[1fr_auto]">
             <div>
-              <h2 className="text-balance font-display text-3xl uppercase leading-[0.95] tracking-tight sm:text-4xl">
+              <h2 className="text-balance font-display text-2xl uppercase leading-[0.95] tracking-tight sm:text-4xl">
                 Every transaction here is real.
               </h2>
               <p className="mt-3 max-w-lg text-sm text-muted">

@@ -82,7 +82,7 @@ export default function PoliciesPage() {
           Dashboard
         </span>
         <div className="mt-4 flex flex-wrap items-center justify-between gap-4">
-          <h1 className="text-balance font-display text-5xl uppercase leading-[0.95] tracking-tight sm:text-6xl">
+          <h1 className="text-balance font-display text-4xl uppercase leading-[0.95] tracking-tight sm:text-6xl">
             My policies
           </h1>
           <a
@@ -100,7 +100,7 @@ export default function PoliciesPage() {
           <div className="grid grid-cols-1 gap-8 sm:grid-cols-[1fr_auto]">
             <div>
               <div className="text-xs text-white/50">Total cover held</div>
-              <div className="font-mono text-5xl font-semibold">
+              <div className="font-mono text-3xl font-semibold sm:text-5xl">
                 {formatAmount(summary.totalCover)} <span className="text-lg text-white/50">USDT0</span>
               </div>
             </div>

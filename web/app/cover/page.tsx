@@ -280,7 +280,7 @@ function CoverForm() {
         <span className="inline-flex rounded-full border border-ink/10 bg-white px-3 py-1 font-mono text-xs font-semibold uppercase tracking-widest text-muted">
           Buy cover
         </span>
-        <h1 className="mt-4 text-balance font-display text-5xl uppercase leading-[0.95] tracking-tight sm:text-6xl">
+        <h1 className="mt-4 text-balance font-display text-4xl uppercase leading-[0.95] tracking-tight sm:text-6xl">
           Flight-delay cover
         </h1>
         <p className="mt-3 max-w-xl text-sm text-muted">
@@ -467,12 +467,12 @@ function CoverForm() {
 
                 <div className="text-xs text-white/50">Premium (10%)</div>
                 {payWith === "USDT0" ? (
-                  <div className="font-mono text-4xl font-semibold text-brand">
+                  <div className="font-mono text-3xl font-semibold text-brand sm:text-4xl">
                     {formatAmount(quote.premium)} <span className="text-lg text-white/50">USDT0</span>
                   </div>
                 ) : (
                   <>
-                    <div className="font-mono text-4xl font-semibold text-brand">
+                    <div className="font-mono text-3xl font-semibold text-brand sm:text-4xl">
                       {fxrpAmount !== undefined ? Number(formatUnits(fxrpAmount, 6)).toFixed(4) : "..."}{" "}
                       <span className="text-lg text-white/50">FXRP</span>
                     </div>
