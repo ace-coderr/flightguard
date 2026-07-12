@@ -77,6 +77,16 @@ function CoverForm() {
     query: { enabled: Boolean(address) && payWith === "FXRP" },
   });
 
+  // Live pool capacity so a judge (or anyone) sees "insufficient pool" coming before the
+  // wallet ever gets a chance to reject the tx (FlightGuard.sol buyCover requires
+  // coverAmount <= freeLiquidity).
+  const { data: freeLiquidityData } = useReadContract({
+    ...flightGuardConfig,
+    functionName: "freeLiquidity",
+    query: { refetchInterval: 15_000 },
+  });
+  const freeLiquidity = freeLiquidityData as bigint | undefined;
+
   // Live FTSO quote for the FXRP path: previewFxrpPremium isn't `view` (it calls FtsoV2's
   // payable getFeedByIdInWei), but a read-only eth_call works regardless - same as any
   // other contract read.
@@ -121,6 +131,11 @@ function CoverForm() {
     if (usdt0Allowance === undefined) return true;
     return (usdt0Allowance as bigint) < quote.premium;
   }, [usdt0Allowance, fxrpAllowance, fxrpAmount, payWith, quote]);
+
+  const exceedsFreeLiquidity = useMemo(() => {
+    if (!quote || freeLiquidity === undefined) return false;
+    return quote.coverAmount > freeLiquidity;
+  }, [quote, freeLiquidity]);
 
   async function runQuote(flightIataValue: string, dateValue: string, coverAmountValue: string) {
     setQuoteError(null);
@@ -355,6 +370,9 @@ function CoverForm() {
               onChange={(e) => setCoverAmountInput(e.target.value)}
               className={`${inputClass} font-mono`}
             />
+            <span className="text-xs text-muted">
+              Pool can back up to {freeLiquidity !== undefined ? formatAmount(freeLiquidity) : "…"} USDT0 right now.
+            </span>
           </label>
           {quoteError && <p className="text-sm text-brand">{quoteError}</p>}
           <button type="submit" disabled={isQuoting} className={primaryButtonClass}>
@@ -501,6 +519,17 @@ function CoverForm() {
                 <dd className="text-right font-mono">{formatDate(quote.scheduledArrival)}</dd>
               </dl>
 
+              {exceedsFreeLiquidity && (
+                <p className="text-sm text-brand">
+                  Exceeds pool capacity ({formatAmount(freeLiquidity)} USDT0 free) — lower your cover or add
+                  liquidity in the{" "}
+                  <Link href="/pool" className="underline">
+                    Pool tab
+                  </Link>
+                  .
+                </p>
+              )}
+
               {!isConnected && <p className="text-sm text-white/60">Connect your wallet to continue.</p>}
 
               {isConnected && (
@@ -518,7 +547,7 @@ function CoverForm() {
                   ) : (
                     <button
                       onClick={handleBuyCover}
-                      disabled={isBuyCoverPending || isBuyCoverConfirming}
+                      disabled={isBuyCoverPending || isBuyCoverConfirming || exceedsFreeLiquidity}
                       className={darkButtonClass}
                     >
                       {isBuyCoverPending || isBuyCoverConfirming ? "Buying cover..." : "Buy cover"}
