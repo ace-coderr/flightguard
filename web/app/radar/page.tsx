@@ -11,9 +11,17 @@ export const metadata: Metadata = {
 // server component (and therefore the cache-check) on every request in between.
 export const revalidate = 600;
 
-const ROW_GRID = "md:grid-cols-[1.2fr_1.4fr_0.8fr_1fr]";
+const ROW_GRID = "md:grid-cols-[1.2fr_1.4fr_0.8fr_0.8fr_1.2fr]";
 
-function RadarRow({ flight }: { flight: DelayedFlight }) {
+// Current UTC date + 1 — the shown flight is already delayed (or landing imminently), so
+// the CTA targets tomorrow's instance of the same flight number, which is still coverable.
+function tomorrowUtcDate(): string {
+  const now = new Date();
+  const tomorrow = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1));
+  return tomorrow.toISOString().slice(0, 10);
+}
+
+function RadarRow({ flight, tomorrow }: { flight: DelayedFlight; tomorrow: string }) {
   const route = flight.depIata && flight.arrIata ? `${flight.depIata} → ${flight.arrIata}` : "Route unknown";
   return (
     <div className={`grid grid-cols-2 gap-x-4 gap-y-2 rounded-2xl border border-ink/10 bg-white px-6 py-5 text-sm md:items-center ${ROW_GRID}`}>
@@ -23,10 +31,18 @@ function RadarRow({ flight }: { flight: DelayedFlight }) {
       </span>
       <span className="font-mono text-muted">{route}</span>
       <span className="font-mono text-lg font-semibold text-brand">+{flight.delayMinutes}m</span>
-      <span className="flex md:justify-end">
+      <span className="flex md:justify-start">
         <span className="rounded-full bg-brand px-2.5 py-1 font-mono text-xs font-semibold uppercase tracking-wide text-white">
           Would pay out
         </span>
+      </span>
+      <span className="col-span-2 flex md:col-span-1 md:justify-end">
+        <Link
+          href={`/cover?flight=${encodeURIComponent(flight.flightIata)}&date=${tomorrow}`}
+          className="rounded-full border border-ink/15 px-3 py-1.5 text-xs font-semibold text-ink transition-colors hover:border-ink hover:bg-ink hover:text-white"
+        >
+          Cover this route →
+        </Link>
       </span>
     </div>
   );
@@ -40,6 +56,7 @@ export default async function RadarPage() {
   } catch (err) {
     error = (err as Error).message;
   }
+  const tomorrow = tomorrowUtcDate();
 
   return (
     <div className="mx-auto max-w-6xl px-6 py-12">
@@ -63,6 +80,10 @@ export default async function RadarPage() {
           Every flight below is delayed 2+ hours right now, straight from live flight data. Under FlightGuard&apos;s
           rules, each one would already be paid out — no claim, no adjuster.
         </p>
+        <p className="mt-2 max-w-xl text-sm text-muted">
+          You cover a flight <em>before</em> it&apos;s delayed — tap &quot;Cover this route&quot; to quote tomorrow&apos;s
+          departure of the same flight number.
+        </p>
       </div>
 
       {error && <p className="text-sm text-brand">Failed to load live delays: {error}</p>}
@@ -77,10 +98,11 @@ export default async function RadarPage() {
             <span>Flight</span>
             <span>Route</span>
             <span>Delay</span>
-            <span className="text-right">Status</span>
+            <span>Status</span>
+            <span className="text-right">Cover it</span>
           </div>
           {flights.map((flight) => (
-            <RadarRow key={flight.flightIata} flight={flight} />
+            <RadarRow key={flight.flightIata} flight={flight} tomorrow={tomorrow} />
           ))}
         </div>
       )}

@@ -1,6 +1,7 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, Suspense, useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { useAccount, useReadContract, useWaitForTransactionReceipt, useWriteContract } from "wagmi";
 import { formatUnits, parseUnits } from "viem";
 import { flightGuardConfig, usdt0Config, fxrpConfig, MAX_COVER, PREMIUM_BPS, USDT0_DECIMALS } from "@/lib/contracts";
@@ -32,7 +33,10 @@ const primaryButtonClass =
 const darkButtonClass =
   "rounded-full bg-brand px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-brand-hover disabled:cursor-not-allowed disabled:opacity-50";
 
-export default function CoverPage() {
+const DEFAULT_DEEP_LINK_COVER_AMOUNT = "100";
+
+function CoverForm() {
+  const searchParams = useSearchParams();
   const { address, isConnected } = useAccount();
 
   const [flightIata, setFlightIata] = useState("");
@@ -96,14 +100,13 @@ export default function CoverPage() {
     return (usdt0Allowance as bigint) < quote.premium;
   }, [usdt0Allowance, fxrpAllowance, fxrpAmount, payWith, quote]);
 
-  async function handleQuote(e: FormEvent) {
-    e.preventDefault();
+  async function runQuote(flightIataValue: string, dateValue: string, coverAmountValue: string) {
     setQuoteError(null);
     setQuote(null);
 
     let coverAmount: bigint;
     try {
-      coverAmount = parseUnits(coverAmountInput || "0", USDT0_DECIMALS);
+      coverAmount = parseUnits(coverAmountValue || "0", USDT0_DECIMALS);
     } catch {
       setQuoteError("Enter a valid cover amount.");
       return;
@@ -118,7 +121,7 @@ export default function CoverPage() {
       const res = await fetch("/api/flight-request", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ flightIata, date }),
+        body: JSON.stringify({ flightIata: flightIataValue, date: dateValue }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -144,6 +147,27 @@ export default function CoverPage() {
       setIsQuoting(false);
     }
   }
+
+  function handleQuote(e: FormEvent) {
+    e.preventDefault();
+    void runQuote(flightIata, date, coverAmountInput);
+  }
+
+  // Deep link from /radar ("Cover this route"): prefill flight + tomorrow's date and
+  // auto-run the quote so the user lands on a ready-to-buy quote. Runs once on mount;
+  // if the flight has no scheduled data yet, runQuote surfaces the normal inline error.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    const flightParam = searchParams.get("flight");
+    const dateParam = searchParams.get("date");
+    if (!flightParam || !dateParam) return;
+
+    const normalizedFlight = flightParam.trim().toUpperCase();
+    setFlightIata(normalizedFlight);
+    setDate(dateParam);
+    setCoverAmountInput(DEFAULT_DEEP_LINK_COVER_AMOUNT);
+    void runQuote(normalizedFlight, dateParam, DEFAULT_DEEP_LINK_COVER_AMOUNT);
+  }, []);
 
   function handleApprove() {
     if (!quote) return;
@@ -383,5 +407,13 @@ export default function CoverPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+export default function CoverPage() {
+  return (
+    <Suspense fallback={null}>
+      <CoverForm />
+    </Suspense>
   );
 }
