@@ -8,6 +8,7 @@ import {
     utcDateOnly,
     validateFlightIata,
 } from "@/lib/server/flightRequest";
+import { quoteRouteRisk } from "@/lib/server/riskPricing";
 
 export async function POST(req: NextRequest) {
     const apiKey = process.env.FLIGHT_API_KEY;
@@ -73,6 +74,12 @@ export async function POST(req: NextRequest) {
     const requestBody = buildFlightRequestBody(flightIata, date);
     const requestHash = computeRequestHash(requestBody);
     const flightRef = buildFlightRef(flightIata, date);
+    const risk = await quoteRouteRisk({
+        flightIata,
+        depIata: flight.depIata,
+        arrIata: flight.arrIata,
+        apiKey,
+    });
 
     return NextResponse.json({
         flightIata,
@@ -85,5 +92,11 @@ export async function POST(req: NextRequest) {
         scheduledArrival,
         requestHash,
         flightRef,
+        premiumBps: risk.premiumBps,
+        delayRate: risk.delayRate,
+        riskSampleSize: risk.sampleSize,
+        riskDelayedCount: risk.delayedCount,
+        riskSource: risk.source,
+        riskDescription: risk.description,
     });
 }

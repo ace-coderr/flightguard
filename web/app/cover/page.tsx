@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useAccount, useReadContract, useWaitForTransactionReceipt, useWriteContract } from "wagmi";
 import { formatUnits, parseUnits } from "viem";
-import { flightGuardConfig, usdt0Config, fxrpConfig, MAX_COVER, PREMIUM_BPS, USDT0_DECIMALS } from "@/lib/contracts";
+import { flightGuardConfig, usdt0Config, fxrpConfig, MAX_COVER, USDT0_DECIMALS } from "@/lib/contracts";
 import { formatAmount, formatDate, formatUtcTime } from "@/lib/format";
 import { ExplorerLink } from "@/components/ExplorerLink";
 
@@ -31,6 +31,12 @@ type Quote = {
   flightRef: string;
   coverAmount: bigint;
   premium: bigint;
+  premiumBps: number;
+  delayRate: number | null;
+  riskSampleSize: number;
+  riskDelayedCount: number;
+  riskSource: "route-history" | "fallback";
+  riskDescription: string;
 };
 
 const inputClass =
@@ -46,6 +52,16 @@ const secondaryDarkButtonClass =
   "rounded-full border border-white/20 px-4 py-2.5 text-sm font-semibold text-white/80 transition-colors hover:border-white/40 hover:text-white";
 
 const DEFAULT_DEEP_LINK_COVER_AMOUNT = "100";
+
+function formatPremiumBps(bps: number) {
+  const pct = bps / 100;
+  return Number.isInteger(pct) ? `${pct}%` : `${pct.toFixed(1)}%`;
+}
+
+function formatDelayRate(rate: number | null) {
+  if (rate === null) return null;
+  return `${Math.round(rate * 100)}%`;
+}
 
 function CoverForm() {
   const router = useRouter();
@@ -92,12 +108,19 @@ function CoverForm() {
   const { data: fxrpPreview } = useReadContract({
     ...flightGuardConfig,
     functionName: "previewFxrpPremium",
-    args: quote ? [quote.coverAmount] : undefined,
+    args: quote ? [quote.coverAmount, quote.premiumBps] : undefined,
     query: { enabled: Boolean(quote) && payWith === "FXRP", refetchInterval: 15_000 },
   });
   const [, fxrpAmount, xrpUsdPriceWei, usdtUsdPriceWei] = (fxrpPreview as
     | readonly [bigint, bigint, bigint, bigint]
     | undefined) ?? [undefined, undefined, undefined, undefined];
+
+  // buyCoverWithFXRP recomputes the FXRP amount from the live FTSO price at execution time,
+  // which is a block or two after this preview. If XRP/USD ticks down in between, the exact
+  // previewed amount is no longer enough and the buy reverts with a raw "ERC20: insufficient
+  // allowance". Approving a small headroom above the quote absorbs that drift - only the
+  // amount the contract actually charges is ever transferred.
+  const fxrpApprovalAmount = fxrpAmount === undefined ? undefined : (fxrpAmount * 102n) / 100n;
 
   const {
     writeContract: writeApprove,
@@ -163,7 +186,8 @@ function CoverForm() {
       if (!res.ok) {
         throw new Error(data.error ?? "Failed to build flight request");
       }
-      const premium = (coverAmount * PREMIUM_BPS) / 10_000n;
+      const premiumBps = Number(data.premiumBps ?? 1000);
+      const premium = (coverAmount * BigInt(premiumBps)) / 10_000n;
       setQuote({
         flightIata: data.flightIata,
         date: data.date,
@@ -176,6 +200,12 @@ function CoverForm() {
         flightRef: data.flightRef,
         coverAmount,
         premium,
+        premiumBps,
+        delayRate: typeof data.delayRate === "number" ? data.delayRate : null,
+        riskSampleSize: Number(data.riskSampleSize ?? 0),
+        riskDelayedCount: Number(data.riskDelayedCount ?? 0),
+        riskSource: data.riskSource ?? "fallback",
+        riskDescription: data.riskDescription ?? "Route-risk sample unavailable - using the documented 10% flat fallback",
       });
     } catch (err) {
       setQuoteError((err as Error).message);
@@ -240,8 +270,8 @@ function CoverForm() {
   function handleApprove() {
     if (!quote) return;
     if (payWith === "FXRP") {
-      if (fxrpAmount === undefined) return;
-      writeApprove({ ...fxrpConfig, functionName: "approve", args: [flightGuardConfig.address, fxrpAmount] });
+      if (fxrpApprovalAmount === undefined) return;
+      writeApprove({ ...fxrpConfig, functionName: "approve", args: [flightGuardConfig.address, fxrpApprovalAmount] });
       return;
     }
     writeApprove({
@@ -257,14 +287,14 @@ function CoverForm() {
       writeBuyCover({
         ...flightGuardConfig,
         functionName: "buyCoverWithFXRP",
-        args: [quote.coverAmount, quote.scheduledArrival, quote.requestHash, quote.flightRef],
+        args: [quote.coverAmount, quote.premiumBps, quote.scheduledArrival, quote.requestHash, quote.flightRef],
       });
       return;
     }
     writeBuyCover({
       ...flightGuardConfig,
       functionName: "buyCover",
-      args: [quote.coverAmount, quote.scheduledArrival, quote.requestHash, quote.flightRef],
+      args: [quote.coverAmount, quote.premiumBps, quote.scheduledArrival, quote.requestHash, quote.flightRef],
     });
   }
 
@@ -386,7 +416,8 @@ function CoverForm() {
               <ul className="flex flex-col gap-4 text-sm text-muted">
                 <li className="flex items-start gap-3">
                   <span className="mt-0.5 h-1.5 w-1.5 shrink-0 rounded-full bg-brand" />
-                  Premium is a flat 10% of your cover amount, paid once when you buy.
+                  Premium starts at 8% and adjusts by route delay risk; if the sample is unavailable, the quote uses
+                  the 10% fallback.
                 </li>
                 <li className="flex items-start gap-3">
                   <span className="mt-0.5 h-1.5 w-1.5 shrink-0 rounded-full bg-brand" />
@@ -493,7 +524,12 @@ function CoverForm() {
                   </div>
                 </div>
 
-                <div className="text-xs text-white/50">Premium (10%)</div>
+                <div className="text-xs text-white/50">
+                  Premium: {formatPremiumBps(quote.premiumBps)}
+                  {quote.delayRate !== null
+                    ? ` - this route has a ${formatDelayRate(quote.delayRate)} observed 2h+ delay/cancel rate`
+                    : " - route-risk data unavailable"}
+                </div>
                 {payWith === "USDT0" ? (
                   <div className="font-mono text-3xl font-semibold text-brand sm:text-4xl">
                     {formatAmount(quote.premium)} <span className="text-lg text-white/50">USDT0</span>
@@ -520,6 +556,11 @@ function CoverForm() {
                     </p>
                   </>
                 )}
+                <p className="mt-1 text-xs text-white/40">
+                  {quote.riskDescription}
+                  {quote.riskSource !== "fallback" &&
+                    " Small free-tier samples are shrunk toward the 10% base rate, so a thin sample never prices the floor outright."}
+                </p>
               </div>
 
               <dl className="grid grid-cols-2 gap-y-2 border-t border-white/10 pt-4 text-sm">

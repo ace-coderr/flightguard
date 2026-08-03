@@ -34,19 +34,20 @@ export default function PoliciesPage() {
             ...flightGuardConfig,
             functionName: "policies",
             args: [BigInt(id)],
-          }) as Promise<readonly [string, bigint, bigint, number, `0x${string}`, string, number, boolean]>
+          }) as Promise<readonly [string, bigint, bigint, number, number, `0x${string}`, string, number, boolean]>
         )
       );
       return results
         .map(
           (
-            [holder, coverAmount, premium, scheduledArrival, requestHash, flightRef, status, premiumInFxrp],
+            [holder, coverAmount, premium, premiumBps, scheduledArrival, requestHash, flightRef, status, premiumInFxrp],
             id
           ): Policy => ({
             id,
             holder,
             coverAmount,
             premium,
+            premiumBps: Number(premiumBps),
             scheduledArrival: Number(scheduledArrival),
             requestHash,
             flightRef,

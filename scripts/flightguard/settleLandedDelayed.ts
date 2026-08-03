@@ -79,8 +79,8 @@ async function main() {
 
     await logPoolState(flightGuard, "before");
 
-    const premiumBps = await flightGuard.PREMIUM_BPS();
-    const premium = (BigInt(coverAmount) * BigInt(premiumBps.toString())) / 10_000n;
+    const premiumBps = 1000; // documented flat fallback for this settlement verification script
+    const premium = (BigInt(coverAmount) * BigInt(premiumBps)) / 10_000n;
     const freeLiquidity = BigInt((await flightGuard.freeLiquidity()).toString());
 
     if (freeLiquidity < BigInt(coverAmount)) {
@@ -100,7 +100,9 @@ async function main() {
 
     const scheduledArrival = Math.floor(Date.now() / 1000) + scheduledArrivalDelaySec;
     const flightRef = `${flightIata}|${flightDate}`;
-    const buyTx = await flightGuard.buyCover(coverAmount, scheduledArrival, requestHash, flightRef, { from: account });
+    const buyTx = await flightGuard.buyCover(coverAmount, premiumBps, scheduledArrival, requestHash, flightRef, {
+        from: account,
+    });
     const coverBoughtEvent = buyTx.logs.find((e: any) => e.event === "CoverBought");
     const policyId = coverBoughtEvent.args.policyId;
     console.log("BuyCover tx:", buyTx.tx, "policyId:", policyId.toString(), "\n");

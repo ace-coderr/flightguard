@@ -2,7 +2,7 @@ import flightGuardAbi from "./abi/FlightGuard.json";
 import usdt0Abi from "./abi/USDT0.json";
 import fxrpAbi from "./abi/FXRP.json";
 
-export const flightGuardAddress = "0xee52694D2C324C03e8AC4490C9675b3bFdFe6A63" as const;
+export const flightGuardAddress = "0x1126B59a867f44329de68b63d376305d3AF877a1" as const;
 export const usdt0Address = "0xC1A5B41512496B80903D1f32d6dEa3a73212E71F" as const;
 // FXRP (FAsset wrapping XRP) - resolved live via AssetManagerFXRP.fAsset() at deploy time,
 // see scripts/flightguard/deploy.ts / scripts/fassets/getFXRP.ts.
@@ -26,7 +26,10 @@ export const fxrpConfig = {
 export const USDT0_DECIMALS = 6;
 export const FXRP_DECIMALS = 6;
 
-export const PREMIUM_BPS = 1000n; // 10%, mirrors FlightGuard.PREMIUM_BPS
+export const MIN_PREMIUM_BPS = 500; // mirrors FlightGuard.MIN_PREMIUM_BPS
+export const LOW_RISK_PREMIUM_BPS = 800; // app pricing floor for low-delay routes
+export const FALLBACK_PREMIUM_BPS = 1000; // mirrors FlightGuard.FALLBACK_PREMIUM_BPS
+export const MAX_PREMIUM_BPS = 1500; // mirrors FlightGuard.MAX_PREMIUM_BPS
 export const MAX_COVER = 500_000_000n; // 500 USDT0, mirrors FlightGuard.MAX_COVER
 export const CLAIM_WINDOW_SECONDS = 3 * 24 * 60 * 60; // 3 days, mirrors FlightGuard.CLAIM_WINDOW
 

@@ -70,6 +70,8 @@ function buildProof(
 // live), both 18-decimal-normalized like the real getFeedByIdInWei.
 const XRP_USD_PRICE_WEI = ethers.parseUnits("1.10", 18);
 const USDT_USD_PRICE_WEI = ethers.parseUnits("0.999", 18);
+const FALLBACK_PREMIUM_BPS = 1000n;
+const RISK_PREMIUM_BPS = 1200n;
 
 async function deployFixture() {
     const [owner, backer, backer2, traveler, other] = await ethers.getSigners();
@@ -124,7 +126,13 @@ async function buyActivePolicy(
 ) {
     const scheduledArrival = (await time.latest()) + 3600;
     const requestHash = computeRequestHash(req);
-    await flightGuard.connect(traveler).buyCover(coverAmount, scheduledArrival, requestHash, flightRef);
+    await flightGuard.connect(traveler).buyCover(
+        coverAmount,
+        FALLBACK_PREMIUM_BPS,
+        scheduledArrival,
+        requestHash,
+        flightRef
+    );
     const policyId = (await flightGuard.policyCount()) - 1n;
     return { policyId, scheduledArrival, requestHash, coverAmount, flightRef };
 }
@@ -205,20 +213,23 @@ describe("FlightGuard", () => {
             await flightGuard.connect(backer).deposit(ethers.parseUnits("100", 6));
 
             const coverAmount = ethers.parseUnits("40", 6);
-            const premiumBps = await flightGuard.PREMIUM_BPS();
+            const premiumBps = await flightGuard.FALLBACK_PREMIUM_BPS();
             const premium = (coverAmount * premiumBps) / 10_000n;
             const scheduledArrival = (await time.latest()) + 3600;
             const requestHash = computeRequestHash();
 
-            await expect(flightGuard.connect(traveler).buyCover(coverAmount, scheduledArrival, requestHash, FLIGHT_REF))
+            await expect(
+                flightGuard.connect(traveler).buyCover(coverAmount, premiumBps, scheduledArrival, requestHash, FLIGHT_REF)
+            )
                 .to.emit(flightGuard, "CoverBought")
-                .withArgs(0n, traveler.address, coverAmount, premium, requestHash, FLIGHT_REF);
+                .withArgs(0n, traveler.address, coverAmount, premium, premiumBps, requestHash, FLIGHT_REF);
 
             expect(await flightGuard.totalLocked()).to.equal(coverAmount);
             const policy = await flightGuard.policies(0n);
             expect(policy.holder).to.equal(traveler.address);
             expect(policy.coverAmount).to.equal(coverAmount);
             expect(policy.premium).to.equal(premium);
+            expect(policy.premiumBps).to.equal(premiumBps);
             expect(policy.flightRef).to.equal(FLIGHT_REF);
             expect(policy.status).to.equal(0n); // Active
         });
@@ -227,18 +238,21 @@ describe("FlightGuard", () => {
             const { flightGuard, backer, traveler } = await loadFixture(deployFixture);
             await flightGuard.connect(backer).deposit(ethers.parseUnits("100", 6));
             const coverAmount = ethers.parseUnits("25", 6);
-            const premiumBps = await flightGuard.PREMIUM_BPS();
+            const premiumBps = RISK_PREMIUM_BPS;
             const premium = (coverAmount * premiumBps) / 10_000n;
             const scheduledArrival = (await time.latest()) + 3600;
             const requestHash = computeRequestHash();
             const flightRef = "KL1631|2026-08-01";
 
-            await expect(flightGuard.connect(traveler).buyCover(coverAmount, scheduledArrival, requestHash, flightRef))
+            await expect(
+                flightGuard.connect(traveler).buyCover(coverAmount, premiumBps, scheduledArrival, requestHash, flightRef)
+            )
                 .to.emit(flightGuard, "CoverBought")
-                .withArgs(0n, traveler.address, coverAmount, premium, requestHash, flightRef);
+                .withArgs(0n, traveler.address, coverAmount, premium, premiumBps, requestHash, flightRef);
 
             const policy = await flightGuard.policies(0n);
             expect(policy.flightRef).to.equal(flightRef);
+            expect(policy.premiumBps).to.equal(premiumBps);
         });
 
         it("reverts when coverAmount is zero", async () => {
@@ -246,7 +260,9 @@ describe("FlightGuard", () => {
             await flightGuard.connect(backer).deposit(ethers.parseUnits("100", 6));
             const scheduledArrival = (await time.latest()) + 3600;
             await expect(
-                flightGuard.connect(traveler).buyCover(0, scheduledArrival, computeRequestHash(), FLIGHT_REF)
+                flightGuard
+                    .connect(traveler)
+                    .buyCover(0, FALLBACK_PREMIUM_BPS, scheduledArrival, computeRequestHash(), FLIGHT_REF)
             ).to.be.revertedWith("cover out of range");
         });
 
@@ -258,7 +274,7 @@ describe("FlightGuard", () => {
             await expect(
                 flightGuard
                     .connect(traveler)
-                    .buyCover(maxCover + 1n, scheduledArrival, computeRequestHash(), FLIGHT_REF)
+                    .buyCover(maxCover + 1n, FALLBACK_PREMIUM_BPS, scheduledArrival, computeRequestHash(), FLIGHT_REF)
             ).to.be.revertedWith("cover out of range");
         });
 
@@ -269,7 +285,13 @@ describe("FlightGuard", () => {
             await expect(
                 flightGuard
                     .connect(traveler)
-                    .buyCover(ethers.parseUnits("10", 6), pastArrival, computeRequestHash(), FLIGHT_REF)
+                    .buyCover(
+                        ethers.parseUnits("10", 6),
+                        FALLBACK_PREMIUM_BPS,
+                        pastArrival,
+                        computeRequestHash(),
+                        FLIGHT_REF
+                    )
             ).to.be.revertedWith("flight in past");
         });
 
@@ -280,8 +302,69 @@ describe("FlightGuard", () => {
             await expect(
                 flightGuard
                     .connect(traveler)
-                    .buyCover(ethers.parseUnits("11", 6), scheduledArrival, computeRequestHash(), FLIGHT_REF)
+                    .buyCover(
+                        ethers.parseUnits("11", 6),
+                        FALLBACK_PREMIUM_BPS,
+                        scheduledArrival,
+                        computeRequestHash(),
+                        FLIGHT_REF
+                    )
             ).to.be.revertedWith("insufficient pool");
+        });
+
+        it("reverts when premiumBps is below the onchain minimum", async () => {
+            const { flightGuard, backer, traveler } = await loadFixture(deployFixture);
+            await flightGuard.connect(backer).deposit(ethers.parseUnits("100", 6));
+            const scheduledArrival = (await time.latest()) + 3600;
+            const minPremiumBps = await flightGuard.MIN_PREMIUM_BPS();
+
+            await expect(
+                flightGuard
+                    .connect(traveler)
+                    .buyCover(
+                        ethers.parseUnits("10", 6),
+                        Number(minPremiumBps) - 1,
+                        scheduledArrival,
+                        computeRequestHash(),
+                        FLIGHT_REF
+                    )
+            ).to.be.revertedWith("premium out of range");
+        });
+
+        it("reverts when premiumBps is above the onchain maximum", async () => {
+            const { flightGuard, backer, traveler } = await loadFixture(deployFixture);
+            await flightGuard.connect(backer).deposit(ethers.parseUnits("100", 6));
+            const scheduledArrival = (await time.latest()) + 3600;
+            const maxPremiumBps = await flightGuard.MAX_PREMIUM_BPS();
+
+            await expect(
+                flightGuard
+                    .connect(traveler)
+                    .buyCover(
+                        ethers.parseUnits("10", 6),
+                        Number(maxPremiumBps) + 1,
+                        scheduledArrival,
+                        computeRequestHash(),
+                        FLIGHT_REF
+                    )
+            ).to.be.revertedWith("premium out of range");
+        });
+
+        it("keeps the 10% flat-fee fallback path available when risk data is unavailable", async () => {
+            const { flightGuard, backer, traveler } = await loadFixture(deployFixture);
+            await flightGuard.connect(backer).deposit(ethers.parseUnits("100", 6));
+            const coverAmount = ethers.parseUnits("40", 6);
+            const fallbackPremiumBps = await flightGuard.FALLBACK_PREMIUM_BPS();
+            const expectedPremium = (coverAmount * fallbackPremiumBps) / 10_000n;
+            const scheduledArrival = (await time.latest()) + 3600;
+
+            await flightGuard
+                .connect(traveler)
+                .buyCover(coverAmount, fallbackPremiumBps, scheduledArrival, computeRequestHash(), FLIGHT_REF);
+
+            const policy = await flightGuard.policies(0n);
+            expect(policy.premium).to.equal(expectedPremium);
+            expect(policy.premiumBps).to.equal(fallbackPremiumBps);
         });
     });
 
@@ -291,10 +374,11 @@ describe("FlightGuard", () => {
         // contract's own formula.
         function expectedFxrpAmount(
             coverAmount: bigint,
+            premiumBps: bigint = FALLBACK_PREMIUM_BPS,
             xrpPriceWei = XRP_USD_PRICE_WEI,
             usdtPriceWei = USDT_USD_PRICE_WEI
         ) {
-            const premiumUsdt0 = (coverAmount * 1000n) / 10_000n; // PREMIUM_BPS
+            const premiumUsdt0 = (coverAmount * premiumBps) / 10_000n;
             return (premiumUsdt0 * usdtPriceWei) / xrpPriceWei; // FXRP_DECIMALS == USDT0_DECIMALS (6), so they cancel
         }
 
@@ -303,17 +387,19 @@ describe("FlightGuard", () => {
             await flightGuard.connect(backer).deposit(ethers.parseUnits("100", 6));
 
             const coverAmount = ethers.parseUnits("40", 6);
-            const premiumBps = await flightGuard.PREMIUM_BPS();
+            const premiumBps = RISK_PREMIUM_BPS;
             const premiumUsdt0 = (coverAmount * premiumBps) / 10_000n;
             const scheduledArrival = (await time.latest()) + 3600;
             const requestHash = computeRequestHash();
-            const expectedFxrp = expectedFxrpAmount(coverAmount);
+            const expectedFxrp = expectedFxrpAmount(coverAmount, premiumBps);
 
             const travelerFxrpBefore = await fxrp.balanceOf(traveler.address);
             const contractFxrpBefore = await fxrp.balanceOf(await flightGuard.getAddress());
 
             await expect(
-                flightGuard.connect(traveler).buyCoverWithFXRP(coverAmount, scheduledArrival, requestHash, FLIGHT_REF)
+                flightGuard
+                    .connect(traveler)
+                    .buyCoverWithFXRP(coverAmount, premiumBps, scheduledArrival, requestHash, FLIGHT_REF)
             )
                 .to.emit(flightGuard, "CoverBoughtWithFXRP")
                 .withArgs(
@@ -321,11 +407,10 @@ describe("FlightGuard", () => {
                     traveler.address,
                     coverAmount,
                     premiumUsdt0,
+                    premiumBps,
                     expectedFxrp,
                     XRP_USD_PRICE_WEI,
-                    USDT_USD_PRICE_WEI,
-                    requestHash,
-                    FLIGHT_REF
+                    USDT_USD_PRICE_WEI
                 );
 
             expect(await fxrp.balanceOf(traveler.address)).to.equal(travelerFxrpBefore - expectedFxrp);
@@ -340,6 +425,7 @@ describe("FlightGuard", () => {
             expect(policy.holder).to.equal(traveler.address);
             expect(policy.coverAmount).to.equal(coverAmount);
             expect(policy.premium).to.equal(premiumUsdt0); // stored as the USDT0-equivalent, not the FXRP amount
+            expect(policy.premiumBps).to.equal(premiumBps);
             expect(policy.status).to.equal(0n); // Active
             expect(policy.premiumInFxrp).to.equal(true);
         });
@@ -349,10 +435,10 @@ describe("FlightGuard", () => {
             const coverAmount = ethers.parseUnits("40", 6);
             const [premiumUsdt0Equivalent, fxrpAmount, xrpUsdPriceWei, usdtUsdPriceWei] = await flightGuard
                 .connect(traveler)
-                .previewFxrpPremium.staticCall(coverAmount);
+                .previewFxrpPremium.staticCall(coverAmount, RISK_PREMIUM_BPS);
 
-            expect(premiumUsdt0Equivalent).to.equal((coverAmount * 1000n) / 10_000n);
-            expect(fxrpAmount).to.equal(expectedFxrpAmount(coverAmount));
+            expect(premiumUsdt0Equivalent).to.equal((coverAmount * RISK_PREMIUM_BPS) / 10_000n);
+            expect(fxrpAmount).to.equal(expectedFxrpAmount(coverAmount, RISK_PREMIUM_BPS));
             expect(xrpUsdPriceWei).to.equal(XRP_USD_PRICE_WEI);
             expect(usdtUsdPriceWei).to.equal(USDT_USD_PRICE_WEI);
         });
@@ -367,12 +453,18 @@ describe("FlightGuard", () => {
 
             const coverAmount = ethers.parseUnits("40", 6);
             const scheduledArrival = (await time.latest()) + 3600;
-            const expectedFxrp = expectedFxrpAmount(coverAmount, doubledXrpPrice);
+            const expectedFxrp = expectedFxrpAmount(coverAmount, FALLBACK_PREMIUM_BPS, doubledXrpPrice);
 
             await expect(
                 flightGuard
                     .connect(traveler)
-                    .buyCoverWithFXRP(coverAmount, scheduledArrival, computeRequestHash(), FLIGHT_REF)
+                    .buyCoverWithFXRP(
+                        coverAmount,
+                        FALLBACK_PREMIUM_BPS,
+                        scheduledArrival,
+                        computeRequestHash(),
+                        FLIGHT_REF
+                    )
             )
                 .to.emit(flightGuard, "CoverBoughtWithFXRP")
                 .withArgs(
@@ -380,11 +472,10 @@ describe("FlightGuard", () => {
                     traveler.address,
                     coverAmount,
                     (coverAmount * 1000n) / 10_000n,
+                    FALLBACK_PREMIUM_BPS,
                     expectedFxrp,
                     doubledXrpPrice,
-                    USDT_USD_PRICE_WEI,
-                    computeRequestHash(),
-                    FLIGHT_REF
+                    USDT_USD_PRICE_WEI
                 );
 
             // Doubling XRP's price should have halved the FXRP the premium costs.
@@ -398,17 +489,57 @@ describe("FlightGuard", () => {
             const travelerFxrpBefore = await fxrp.balanceOf(traveler.address);
 
             await expect(
-                flightGuard.connect(traveler).buyCoverWithFXRP(0, scheduledArrival, computeRequestHash(), FLIGHT_REF)
+                flightGuard
+                    .connect(traveler)
+                    .buyCoverWithFXRP(0, FALLBACK_PREMIUM_BPS, scheduledArrival, computeRequestHash(), FLIGHT_REF)
             ).to.be.revertedWith("cover out of range");
 
             const pastArrival = (await time.latest()) - 10;
             await expect(
                 flightGuard
                     .connect(traveler)
-                    .buyCoverWithFXRP(ethers.parseUnits("10", 6), pastArrival, computeRequestHash(), FLIGHT_REF)
+                    .buyCoverWithFXRP(
+                        ethers.parseUnits("10", 6),
+                        FALLBACK_PREMIUM_BPS,
+                        pastArrival,
+                        computeRequestHash(),
+                        FLIGHT_REF
+                    )
             ).to.be.revertedWith("flight in past");
 
             expect(await fxrp.balanceOf(traveler.address)).to.equal(travelerFxrpBefore);
+        });
+
+        it("reverts buyCoverWithFXRP when premiumBps is outside the onchain bounds", async () => {
+            const { flightGuard, backer, traveler } = await loadFixture(deployFixture);
+            await flightGuard.connect(backer).deposit(ethers.parseUnits("100", 6));
+            const scheduledArrival = (await time.latest()) + 3600;
+            const minPremiumBps = await flightGuard.MIN_PREMIUM_BPS();
+            const maxPremiumBps = await flightGuard.MAX_PREMIUM_BPS();
+
+            await expect(
+                flightGuard
+                    .connect(traveler)
+                    .buyCoverWithFXRP(
+                        ethers.parseUnits("10", 6),
+                        Number(minPremiumBps) - 1,
+                        scheduledArrival,
+                        computeRequestHash(),
+                        FLIGHT_REF
+                    )
+            ).to.be.revertedWith("premium out of range");
+
+            await expect(
+                flightGuard
+                    .connect(traveler)
+                    .buyCoverWithFXRP(
+                        ethers.parseUnits("10", 6),
+                        Number(maxPremiumBps) + 1,
+                        scheduledArrival,
+                        computeRequestHash(),
+                        FLIGHT_REF
+                    )
+            ).to.be.revertedWith("premium out of range");
         });
 
         it("reverts if a stale/zero FTSO price is returned", async () => {
@@ -421,7 +552,13 @@ describe("FlightGuard", () => {
             await expect(
                 flightGuard
                     .connect(traveler)
-                    .buyCoverWithFXRP(ethers.parseUnits("10", 6), scheduledArrival, computeRequestHash(), FLIGHT_REF)
+                    .buyCoverWithFXRP(
+                        ethers.parseUnits("10", 6),
+                        FALLBACK_PREMIUM_BPS,
+                        scheduledArrival,
+                        computeRequestHash(),
+                        FLIGHT_REF
+                    )
             ).to.be.revertedWith("bad FTSO price");
         });
 
@@ -434,7 +571,7 @@ describe("FlightGuard", () => {
             const requestHash = computeRequestHash();
             await flightGuard
                 .connect(traveler)
-                .buyCoverWithFXRP(coverAmount, scheduledArrival, requestHash, FLIGHT_REF);
+                .buyCoverWithFXRP(coverAmount, FALLBACK_PREMIUM_BPS, scheduledArrival, requestHash, FLIGHT_REF);
 
             await time.increaseTo(scheduledArrival);
             const holderBalanceBefore = await token.balanceOf(traveler.address);
@@ -463,12 +600,14 @@ describe("FlightGuard", () => {
             const scheduledArrival = (await time.latest()) + 3600;
             const requestHash = computeRequestHash(); // same REQUEST (same flight+date) for both paths
 
-            await flightGuard.connect(traveler).buyCover(coverAmount, scheduledArrival, requestHash, FLIGHT_REF);
+            await flightGuard
+                .connect(traveler)
+                .buyCover(coverAmount, FALLBACK_PREMIUM_BPS, scheduledArrival, requestHash, FLIGHT_REF);
             const usdt0PolicyId = (await flightGuard.policyCount()) - 1n;
 
             await flightGuard
                 .connect(traveler)
-                .buyCoverWithFXRP(coverAmount, scheduledArrival, requestHash, FLIGHT_REF);
+                .buyCoverWithFXRP(coverAmount, FALLBACK_PREMIUM_BPS, scheduledArrival, requestHash, FLIGHT_REF);
             const fxrpPolicyId = (await flightGuard.policyCount()) - 1n;
 
             expect((await flightGuard.policies(usdt0PolicyId)).requestHash).to.equal(

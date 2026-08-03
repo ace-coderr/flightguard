@@ -12,6 +12,7 @@ export type Policy = {
   holder: string;
   coverAmount: bigint;
   premium: bigint;
+  premiumBps: number;
   scheduledArrival: number;
   requestHash: `0x${string}`;
   flightRef: string;
@@ -114,6 +115,11 @@ const smallButtonClass =
 
 const smallBrandButtonClass =
   "rounded-full bg-brand px-4 py-2 text-xs font-semibold text-white transition-colors hover:bg-brand-hover disabled:cursor-not-allowed disabled:opacity-50";
+
+function formatPremiumBps(bps: number) {
+  const pct = bps / 100;
+  return Number.isInteger(pct) ? `${pct}%` : `${pct.toFixed(1)}%`;
+}
 
 export function PolicyRow({ policy, rowGridClass, onSettled }: { policy: Policy; rowGridClass: string; onSettled: () => void }) {
   const meta = parsePolicyFlightRef(policy.flightRef);
@@ -262,6 +268,7 @@ export function PolicyRow({ policy, rowGridClass, onSettled }: { policy: Policy;
         <span className="font-mono">{formatAmount(policy.coverAmount)} USDT0</span>
         <span className="font-mono">
           {formatAmount(policy.premium)} USDT0
+          <span className="ml-1 text-xs text-muted">({formatPremiumBps(policy.premiumBps)})</span>
           {policy.premiumInFxrp && <span className="ml-1 text-xs text-muted">(paid in FXRP)</span>}
         </span>
         <span className="font-mono text-muted">{formatDate(policy.scheduledArrival)}</span>

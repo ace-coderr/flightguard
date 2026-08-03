@@ -65,6 +65,12 @@
             },
             {
                 "indexed": false,
+                "internalType": "uint16",
+                "name": "premiumBps",
+                "type": "uint16"
+            },
+            {
+                "indexed": false,
                 "internalType": "bytes32",
                 "name": "requestHash",
                 "type": "bytes32"
@@ -108,6 +114,12 @@
             },
             {
                 "indexed": false,
+                "internalType": "uint16",
+                "name": "premiumBps",
+                "type": "uint16"
+            },
+            {
+                "indexed": false,
                 "internalType": "uint256",
                 "name": "fxrpAmount",
                 "type": "uint256"
@@ -123,18 +135,6 @@
                 "internalType": "uint256",
                 "name": "usdtUsdPriceWei",
                 "type": "uint256"
-            },
-            {
-                "indexed": false,
-                "internalType": "bytes32",
-                "name": "requestHash",
-                "type": "bytes32"
-            },
-            {
-                "indexed": false,
-                "internalType": "string",
-                "name": "flightRef",
-                "type": "string"
             }
         ],
         "name": "CoverBoughtWithFXRP",
@@ -249,6 +249,19 @@
     },
     {
         "inputs": [],
+        "name": "FALLBACK_PREMIUM_BPS",
+        "outputs": [
+            {
+                "internalType": "uint16",
+                "name": "",
+                "type": "uint16"
+            }
+        ],
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "inputs": [],
         "name": "FXRP_PROXY_FEED_ID",
         "outputs": [
             {
@@ -275,12 +288,25 @@
     },
     {
         "inputs": [],
-        "name": "PREMIUM_BPS",
+        "name": "MAX_PREMIUM_BPS",
         "outputs": [
             {
-                "internalType": "uint256",
+                "internalType": "uint16",
                 "name": "",
-                "type": "uint256"
+                "type": "uint16"
+            }
+        ],
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "inputs": [],
+        "name": "MIN_PREMIUM_BPS",
+        "outputs": [
+            {
+                "internalType": "uint16",
+                "name": "",
+                "type": "uint16"
             }
         ],
         "stateMutability": "view",
@@ -305,6 +331,11 @@
                 "internalType": "uint256",
                 "name": "coverAmount",
                 "type": "uint256"
+            },
+            {
+                "internalType": "uint16",
+                "name": "premiumBps",
+                "type": "uint16"
             },
             {
                 "internalType": "uint64",
@@ -339,6 +370,11 @@
                 "internalType": "uint256",
                 "name": "coverAmount",
                 "type": "uint256"
+            },
+            {
+                "internalType": "uint16",
+                "name": "premiumBps",
+                "type": "uint16"
             },
             {
                 "internalType": "uint64",
@@ -497,6 +533,11 @@
                 "type": "uint256"
             },
             {
+                "internalType": "uint16",
+                "name": "premiumBps",
+                "type": "uint16"
+            },
+            {
                 "internalType": "uint64",
                 "name": "scheduledArrival",
                 "type": "uint64"
@@ -557,6 +598,11 @@
                 "internalType": "uint256",
                 "name": "coverAmount",
                 "type": "uint256"
+            },
+            {
+                "internalType": "uint16",
+                "name": "premiumBps",
+                "type": "uint16"
             }
         ],
         "name": "previewFxrpPremium",
@@ -583,6 +629,30 @@
             }
         ],
         "stateMutability": "nonpayable",
+        "type": "function"
+    },
+    {
+        "inputs": [
+            {
+                "internalType": "uint256",
+                "name": "coverAmount",
+                "type": "uint256"
+            },
+            {
+                "internalType": "uint16",
+                "name": "premiumBps",
+                "type": "uint16"
+            }
+        ],
+        "name": "previewPremium",
+        "outputs": [
+            {
+                "internalType": "uint256",
+                "name": "",
+                "type": "uint256"
+            }
+        ],
+        "stateMutability": "pure",
         "type": "function"
     },
     {

@@ -76,8 +76,8 @@ async function main() {
     console.log("Account:    ", account, "\n");
 
     // 1. Backer: approve + deposit into the pool
-    const premiumBps = await flightGuard.PREMIUM_BPS();
-    const premium = (BigInt(coverAmount) * BigInt(premiumBps.toString())) / 10_000n;
+    const premiumBps = 1000; // documented flat fallback for this demo script
+    const premium = (BigInt(coverAmount) * BigInt(premiumBps)) / 10_000n;
     const totalApproval = BigInt(depositAmount) + premium;
     await token.approve(flightGuard.address, totalApproval.toString(), { from: account });
     console.log(`Approved ${web3.utils.fromWei(totalApproval.toString(), "mwei")} USDT0 (deposit + premium)\n`);
@@ -93,7 +93,9 @@ async function main() {
 
     const scheduledArrival = Math.floor(Date.now() / 1000) + scheduledArrivalDelaySec;
     const flightRef = `${flightIata}|${flightDate}`;
-    const buyTx = await flightGuard.buyCover(coverAmount, scheduledArrival, requestHash, flightRef, { from: account });
+    const buyTx = await flightGuard.buyCover(coverAmount, premiumBps, scheduledArrival, requestHash, flightRef, {
+        from: account,
+    });
     const coverBoughtEvent = buyTx.logs.find((e: any) => e.event === "CoverBought");
     const policyId = coverBoughtEvent.args.policyId;
     console.log("BuyCover tx:", buyTx.tx, "policyId:", policyId.toString(), "\n");

@@ -15,7 +15,11 @@ import { getSettleStatus, startSettleJob } from "./settle";
  * is logged as a skip, not treated as a failure.
  */
 
-type RawPolicy = readonly [string, bigint, bigint, number, `0x${string}`, string, number, boolean];
+// Mirrors FlightGuard.Policy field-for-field, in declaration order:
+// holder, coverAmount, premium, premiumBps, scheduledArrival, requestHash, flightRef,
+// status, premiumInFxrp. Keep in sync with the struct - this is read positionally, so a
+// field added mid-struct silently shifts everything after it.
+type RawPolicy = readonly [string, bigint, bigint, number, number, `0x${string}`, string, number, boolean];
 
 type DuePolicy = {
     id: number;
@@ -54,7 +58,7 @@ async function getDuePolicies(publicClient: PublicClient): Promise<DuePolicy[]> 
     );
 
     return rawPolicies
-        .map(([, , , scheduledArrival, requestHash, flightRef, status], id): DuePolicy & { status: PolicyStatus } => ({
+        .map(([, , , , scheduledArrival, requestHash, flightRef, status], id): DuePolicy & { status: PolicyStatus } => ({
             id,
             scheduledArrival: Number(scheduledArrival),
             requestHash,

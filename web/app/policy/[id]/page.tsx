@@ -14,7 +14,12 @@ import { findSettlementEvidence, type SettlementEvidence } from "@/lib/server/re
 // getLogs scan (see lib/server/receipts.ts) on every single receipt view.
 export const revalidate = 120;
 
-type RawPolicy = readonly [string, bigint, bigint, number, `0x${string}`, string, number, boolean];
+type RawPolicy = readonly [string, bigint, bigint, number, number, `0x${string}`, string, number, boolean];
+
+function formatPremiumBps(bps: number) {
+  const pct = bps / 100;
+  return Number.isInteger(pct) ? `${pct}%` : `${pct.toFixed(1)}%`;
+}
 
 const getPolicy = cache(async (id: number) => {
   const publicClient = getPublicClient();
@@ -24,13 +29,14 @@ const getPolicy = cache(async (id: number) => {
       functionName: "policies",
       args: [BigInt(id)],
     })) as RawPolicy;
-    const [holder, coverAmount, premium, scheduledArrival, requestHash, flightRef, status, premiumInFxrp] = raw;
+    const [holder, coverAmount, premium, premiumBps, scheduledArrival, requestHash, flightRef, status, premiumInFxrp] = raw;
     if (holder === "0x0000000000000000000000000000000000000000") return null;
     return {
       id,
       holder,
       coverAmount,
       premium,
+      premiumBps: Number(premiumBps),
       scheduledArrival: Number(scheduledArrival),
       requestHash,
       flightRef,
@@ -179,7 +185,9 @@ export default async function PolicyReceiptPage({ params }: { params: { id: stri
           </div>
           <div className="mt-4 text-xs text-white/50">Premium</div>
           <div className="font-mono text-lg font-medium">
-            {formatAmount(policy.premium)} USDT0{policy.premiumInFxrp && <span className="text-white/50"> (paid in FXRP)</span>}
+            {formatAmount(policy.premium)} USDT0{" "}
+            <span className="text-white/50">({formatPremiumBps(policy.premiumBps)})</span>
+            {policy.premiumInFxrp && <span className="text-white/50"> (paid in FXRP)</span>}
           </div>
           <div className="mt-4 text-xs text-white/50">Scheduled arrival</div>
           <div className="font-mono text-lg font-medium">{formatDate(policy.scheduledArrival)}</div>

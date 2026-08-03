@@ -17,6 +17,7 @@ const flightDate = "2026-07-11";
 
 const depositAmount = web3.utils.toWei("2", "mwei"); // 2 USDT0 backer deposit (6 decimals)
 const coverAmount = web3.utils.toWei("0.5", "mwei"); // 0.5 USDT0 cover bought against that pool
+const premiumBps = 1000; // documented flat fallback when no route-risk quote is being tested
 const scheduledArrivalDelaySec = 90; // flight "lands" 90s from now, so it's past-due almost immediately
 
 async function main() {
@@ -26,8 +27,7 @@ async function main() {
     console.log("FlightGuard:", flightGuard.address);
     console.log("Account:    ", account, "\n");
 
-    const premiumBps = await flightGuard.PREMIUM_BPS();
-    const premium = (BigInt(coverAmount) * BigInt(premiumBps.toString())) / 10_000n;
+    const premium = (BigInt(coverAmount) * BigInt(premiumBps)) / 10_000n;
     const freeLiquidity = BigInt((await flightGuard.freeLiquidity()).toString());
 
     // Only deposit if the pool doesn't already have enough free liquidity (idempotent
@@ -46,7 +46,9 @@ async function main() {
     const flightRef = `${flightIata}|${flightDate}`;
 
     const scheduledArrival = Math.floor(Date.now() / 1000) + scheduledArrivalDelaySec;
-    const buyTx = await flightGuard.buyCover(coverAmount, scheduledArrival, requestHash, flightRef, { from: account });
+    const buyTx = await flightGuard.buyCover(coverAmount, premiumBps, scheduledArrival, requestHash, flightRef, {
+        from: account,
+    });
     const coverBoughtEvent = buyTx.logs.find((e: any) => e.event === "CoverBought");
     const policyId = coverBoughtEvent.args.policyId;
 

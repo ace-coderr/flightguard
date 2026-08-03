@@ -35,7 +35,9 @@ contract FlightGuard {
     address public owner;
 
     uint256 public constant DELAY_THRESHOLD_MIN = 120; // >= 2h delay pays out
-    uint256 public constant PREMIUM_BPS = 1000; // 10% of cover amount
+    uint16 public constant MIN_PREMIUM_BPS = 500; // onchain guardrail: 5%
+    uint16 public constant FALLBACK_PREMIUM_BPS = 1000; // 10% flat fallback when route-risk data is unavailable
+    uint16 public constant MAX_PREMIUM_BPS = 1500; // onchain guardrail: 15%
     uint256 public constant MAX_COVER = 500e6; // 500 USDT0 cap per policy (demo)
     uint256 public constant CLAIM_WINDOW = 3 days; // after scheduledArrival
 
@@ -79,6 +81,7 @@ contract FlightGuard {
         address holder;
         uint256 coverAmount;
         uint256 premium; // always the USDT0-equivalent amount, even when paid in FXRP
+        uint16 premiumBps; // route-risk premium used at purchase time
         uint64 scheduledArrival; // unix ts
         bytes32 requestHash; // keccak of expected FDC request (url+headers+queryParams+jq+abiSig)
         string flightRef; // "IATA|YYYY-MM-DD", lets a keeper rebuild the FDC request without offchain state
@@ -95,6 +98,7 @@ contract FlightGuard {
         address indexed holder,
         uint256 coverAmount,
         uint256 premium,
+        uint16 premiumBps,
         bytes32 requestHash,
         string flightRef
     );
@@ -103,11 +107,10 @@ contract FlightGuard {
         address indexed holder,
         uint256 coverAmount,
         uint256 premiumUsdt0Equivalent,
+        uint16 premiumBps,
         uint256 fxrpAmount,
         uint256 xrpUsdPriceWei,
-        uint256 usdtUsdPriceWei,
-        bytes32 requestHash,
-        string flightRef
+        uint256 usdtUsdPriceWei
     );
     event Settled(uint256 indexed policyId, Status result, uint256 delayMinutes, bool cancelled);
 
@@ -165,102 +168,82 @@ contract FlightGuard {
      */
     function buyCover(
         uint256 coverAmount,
+        uint16 premiumBps,
         uint64 scheduledArrival,
         bytes32 requestHash,
         string calldata flightRef
     ) external returns (uint256 policyId) {
         require(coverAmount > 0 && coverAmount <= MAX_COVER, "cover out of range");
+        require(premiumBps >= MIN_PREMIUM_BPS && premiumBps <= MAX_PREMIUM_BPS, "premium out of range");
         require(scheduledArrival > block.timestamp, "flight in past");
         require(coverAmount <= freeLiquidity(), "insufficient pool");
 
-        uint256 premium = (coverAmount * PREMIUM_BPS) / 10_000;
+        uint256 premium = previewPremium(coverAmount, premiumBps);
         token.safeTransferFrom(msg.sender, address(this), premium); // premium accrues to pool
 
-        totalLocked += coverAmount;
-        policies.push(
-            Policy({
-                holder: msg.sender,
-                coverAmount: coverAmount,
-                premium: premium,
-                scheduledArrival: scheduledArrival,
-                requestHash: requestHash,
-                flightRef: flightRef,
-                status: Status.Active,
-                premiumInFxrp: false
-            })
-        );
-        policyId = policies.length - 1;
-        emit CoverBought(policyId, msg.sender, coverAmount, premium, requestHash, flightRef);
+        policyId = _openPolicy(coverAmount, premium, premiumBps, scheduledArrival, requestHash, flightRef, false);
+        emit CoverBought(policyId, msg.sender, coverAmount, premium, premiumBps, requestHash, flightRef);
     }
 
     /**
-     * Same terms as buyCover (cover stays USDT0-denominated, same 10% PREMIUM_BPS), but the
-     * premium is paid in FXRP instead, converted at the live FTSO XRP/USD and USDT/USD rates
-     * (see FXRP_PROXY_FEED_ID/USDT0_PROXY_FEED_ID above). The FXRP collected is tracked in
-     * fxrpPremiums, entirely separate from the USDT0 pool - settle()/expire() and all payout
-     * math are untouched, since payouts always come from the USDT0 pool regardless of how
-     * the premium was paid.
+     * Same terms as buyCover (cover stays USDT0-denominated, route-risk premiumBps bounded
+     * onchain), but the premium is paid in FXRP instead. The risk-adjusted USDT0 premium is
+     * computed first, then converted at the live FTSO XRP/USD and USDT/USD rates (see
+     * FXRP_PROXY_FEED_ID/USDT0_PROXY_FEED_ID above). The FXRP collected is tracked in
+     * fxrpPremiums, entirely separate from the USDT0 pool - settle()/expire() and all
+     * payout math are untouched, since payouts always come from the USDT0 pool regardless
+     * of how the premium was paid.
      */
     function buyCoverWithFXRP(
         uint256 coverAmount,
+        uint16 premiumBps,
         uint64 scheduledArrival,
         bytes32 requestHash,
         string calldata flightRef
     ) external returns (uint256 policyId) {
         require(coverAmount > 0 && coverAmount <= MAX_COVER, "cover out of range");
+        require(premiumBps >= MIN_PREMIUM_BPS && premiumBps <= MAX_PREMIUM_BPS, "premium out of range");
         require(scheduledArrival > block.timestamp, "flight in past");
         require(coverAmount <= freeLiquidity(), "insufficient pool");
 
         (uint256 premiumUsdt0, uint256 fxrpAmount, uint256 xrpUsdPrice, uint256 usdtUsdPrice) = previewFxrpPremium(
-            coverAmount
+            coverAmount,
+            premiumBps
         );
         require(fxrpAmount > 0, "premium rounds to zero FXRP");
 
         fxrpToken.safeTransferFrom(msg.sender, address(this), fxrpAmount);
         fxrpPremiums += fxrpAmount;
 
-        totalLocked += coverAmount;
-        policies.push(
-            Policy({
-                holder: msg.sender,
-                coverAmount: coverAmount,
-                premium: premiumUsdt0,
-                scheduledArrival: scheduledArrival,
-                requestHash: requestHash,
-                flightRef: flightRef,
-                status: Status.Active,
-                premiumInFxrp: true
-            })
-        );
-        policyId = policies.length - 1;
+        policyId = _openPolicy(coverAmount, premiumUsdt0, premiumBps, scheduledArrival, requestHash, flightRef, true);
         emit CoverBoughtWithFXRP(
             policyId,
             msg.sender,
             coverAmount,
             premiumUsdt0,
+            premiumBps,
             fxrpAmount,
             xrpUsdPrice,
-            usdtUsdPrice,
-            requestHash,
-            flightRef
+            usdtUsdPrice
         );
     }
 
     /**
-     * Quotes the FXRP amount buyCoverWithFXRP(coverAmount, ...) would currently charge, plus
-     * the raw 18-decimal-normalized FTSO prices used (so the UI can show its source). Not
-     * `view`: FtsoV2's getFeedByIdInWei is declared `payable` (some feeds carry a
-     * FeeCalculator fee; ours don't, so this is called with 0 value), which Solidity treats
-     * as non-view - but it performs no state writes, so callers still read it with a plain
-     * eth_call.
+     * Quotes the FXRP amount buyCoverWithFXRP(coverAmount, premiumBps, ...) would currently
+     * charge, plus the raw 18-decimal-normalized FTSO prices used (so the UI can show its
+     * source). Not `view`: FtsoV2's getFeedByIdInWei is declared `payable` (some feeds
+     * carry a FeeCalculator fee; ours don't, so this is called with 0 value), which
+     * Solidity treats as non-view - but it performs no state writes, so callers still read
+     * it with a plain eth_call.
      */
     function previewFxrpPremium(
-        uint256 coverAmount
+        uint256 coverAmount,
+        uint16 premiumBps
     )
         public
         returns (uint256 premiumUsdt0Equivalent, uint256 fxrpAmount, uint256 xrpUsdPriceWei, uint256 usdtUsdPriceWei)
     {
-        premiumUsdt0Equivalent = (coverAmount * PREMIUM_BPS) / 10_000;
+        premiumUsdt0Equivalent = previewPremium(coverAmount, premiumBps);
 
         // getFeedByIdInWei normalizes every feed to 18 decimals regardless of its native
         // precision, so no raw `decimals` field needs handling here.
@@ -276,6 +259,37 @@ contract FlightGuard {
             ((10 ** USDT0_DECIMALS) * xrpPriceWei);
         xrpUsdPriceWei = xrpPriceWei;
         usdtUsdPriceWei = usdtPriceWei;
+    }
+
+    function previewPremium(uint256 coverAmount, uint16 premiumBps) public pure returns (uint256) {
+        require(premiumBps >= MIN_PREMIUM_BPS && premiumBps <= MAX_PREMIUM_BPS, "premium out of range");
+        return (coverAmount * premiumBps) / 10_000;
+    }
+
+    function _openPolicy(
+        uint256 coverAmount,
+        uint256 premium,
+        uint16 premiumBps,
+        uint64 scheduledArrival,
+        bytes32 requestHash,
+        string calldata flightRef,
+        bool premiumInFxrp
+    ) internal returns (uint256 policyId) {
+        totalLocked += coverAmount;
+        policies.push(
+            Policy({
+                holder: msg.sender,
+                coverAmount: coverAmount,
+                premium: premium,
+                premiumBps: premiumBps,
+                scheduledArrival: scheduledArrival,
+                requestHash: requestHash,
+                flightRef: flightRef,
+                status: Status.Active,
+                premiumInFxrp: premiumInFxrp
+            })
+        );
+        policyId = policies.length - 1;
     }
 
     // ---------- settlement ----------

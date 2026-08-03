@@ -10,17 +10,18 @@ import { flightGuardAddress } from "./config";
 // consistent. Run after scripts/flightguard/deploy.ts.
 
 const FlightGuard = artifacts.require("FlightGuard");
+const premiumBps = 1200;
 
 async function main() {
     const flightGuard = await FlightGuard.at(flightGuardAddress);
 
     const coverAmount = ethers.parseUnits("40", 6);
-    const result = await flightGuard.previewFxrpPremium.call(coverAmount);
+    const result = await flightGuard.previewFxrpPremium.call(coverAmount, premiumBps);
     const { premiumUsdt0Equivalent, fxrpAmount, xrpUsdPriceWei, usdtUsdPriceWei } = result;
 
     console.log("FlightGuard:", flightGuard.address);
     console.log(`Cover amount:  ${ethers.formatUnits(coverAmount.toString(), 6)} USDT0`);
-    console.log(`Premium (10%): ${ethers.formatUnits(premiumUsdt0Equivalent.toString(), 6)} USDT0`);
+    console.log(`Premium (${premiumBps / 100}%): ${ethers.formatUnits(premiumUsdt0Equivalent.toString(), 6)} USDT0`);
     console.log(`Live XRP/USD:  $${ethers.formatUnits(xrpUsdPriceWei.toString(), 18)}`);
     console.log(`Live USDT/USD: $${ethers.formatUnits(usdtUsdPriceWei.toString(), 18)}`);
     console.log(`=> FXRP owed:  ${ethers.formatUnits(fxrpAmount.toString(), 6)} FXRP\n`);
