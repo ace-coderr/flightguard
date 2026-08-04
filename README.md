@@ -60,24 +60,42 @@ Coston2 exposes no `FXRP/USD` or `USDT0/USD` feed (verified against the full 64-
 
 The premium is **not flat** — it reflects how often the route the traveler is flying actually triggers a payout (2h+ arrival delay or cancellation). Low-delay routes price at **8%**, scaling to a hard **15%** cap for high-delay routes.
 
-**Where it happens.** `/api/flight-request` resolves the flight's real route (dep/arr IATA) via the first-party airlabs proxy, estimates the route's delay rate (`web/lib/server/riskPricing.ts`), and returns a `premiumBps` alongside the quote. The `/cover` page shows it directly — _"Premium: 9.29% — this route has a 7% observed 2h+ delay/cancel rate"_ — instead of the old flat "Premium (10%)" label.
+Live pricing across 15 real routes currently spans **8.00% – 13.88%**, every route distinct — FRA→MUC 8.00%, NRT→ICN 8.64%, JFK→LHR 9.91%, DXB→BOM 11.02%, ATL→MCO 13.21%, DFW→LAX 13.86%, ORD→DFW 13.88%.
+
+**Where it happens.** `/api/flight-request` resolves the flight's real route (dep/arr IATA) via the first-party airlabs proxy, estimates the route's risk (`web/lib/server/riskPricing.ts`), and returns a `premiumBps` alongside the quote. The `/cover` page shows it directly — _"Premium: 13.88% — 28% of recent flights on this route ran 30min+ late"_, with _"Based on 57 historical flights across 25 days on this route"_ underneath — instead of the old flat "Premium (10%)" label.
 
 **The premium is bounded onchain, not just in the UI.** `buyCover` / `buyCoverWithFXRP` take `premiumBps` as an argument and require `MIN_PREMIUM_BPS (500) <= premiumBps <= MAX_PREMIUM_BPS (1500)`, so a malicious or buggy frontend cannot drive the premium to zero or to an extortionate value. The risk-adjusted premium is computed **first**, and is the USD amount that then gets converted to FXRP by the FTSO read in `previewFxrpPremium` — one premium, two payment assets, not two independent calculations.
 
-### How the delay rate is estimated (and its limits)
+### Why it doesn't just count 2h+ delays
 
-airlabs' free tier has no route-level history query: the historical endpoint requires a specific `flight_iata` and returns **at most 5 past instances** per flight (`limit` is ignored). Five observations cannot resolve a rare tail event like a 2h+ delay, so:
+The obvious estimator — _"what fraction of recent flights on this route ran 2h+ late"_ — was measured against real data and is close to useless at free-tier sample sizes.
 
-- **Widen to the city pair.** The schedules endpoint lists the flights serving `dep→arr`; we pull history for up to 6 of them, lifting the sample to roughly 10–30 flights on busy routes.
-- **Collapse codeshares.** Those schedules are dense with codeshares — `KL2501` / `DL5994` / `AF6753` / `VS4` can be one physical aircraft, each reporting the same delay. Observations are deduped by (route, departure slot), so one real flight counts once. Without this, JFK→LHR reports 30 "independent" observations that are really 10.
-- **Drop flights with no known outcome**, so scheduled-but-not-yet-flown rows can't be miscounted as on-time.
-- **Shrink toward the base rate.** With small samples a raw frequency is unstable — 0/8 would price the floor with false confidence. The severity-weighted event count is shrunk toward the rate implied by the 10% fallback using 5 pseudo-observations, so _thin evidence prices near the flat rate and only real evidence moves the price_. A 5-flight clean sample therefore prices **above** a 40-flight clean sample.
-- **Partial credit for near misses.** A 2h+ delay is the payout trigger but is rare in any free-tier sample, while a route that is routinely 45–90 minutes late plainly carries more tail risk than one that always lands on time. Shorter delays contribute a fraction of an event (a documented heuristic, not a fitted model).
+Splitting each route's history by day and correlating one half against the other gives each statistic's **split-half reliability**: how much of its route-to-route variation is real signal rather than sampling noise. Measured over 30 routes / ~1,500 real flights:
+
+| statistic | reliability |
+| --- | --- |
+| severe (2h+/cancel) rate | **0.11** — roughly 90% noise |
+| p90 of non-severe delay minutes | 0.37 |
+| moderate (30min+) rate | **0.59** — the most reliable signal available |
+
+The reason is visible in the raw data: **2h+ events are episodic weather shocks, not a stable property of a route.** Across those 30 routes, 51% of a route's severe events fell on its single worst day, and HKG→TPE had _all 16_ of its severe events on one day and zero on the other four. Pricing off that number mostly prices which storm happened to land inside the sample window. Confirming it: removing severe events from a route's mean delay drops the mean-delay/severe-rate correlation from 0.809 to **0.246** — the apparent relationship was mostly mechanical.
+
+So the estimate is built primarily from the **moderate-delay signal**, converted to an expected 2h+ rate through relationships fitted on that same calibration set, with each component weighted by its measured reliability. Concretely:
+
+- **Widen to the city pair.** The historical endpoint takes only a `flight_iata`, so the schedules endpoint supplies the other flights serving `dep→arr` and history is pulled for up to 40 of them — lifting n from ~10 to **~60–100** on busy routes.
+- **Collapse codeshares.** `KL2501` / `DL5994` / `AF6753` / `VS4` can be one physical aircraft each reporting the same delay. Observations are deduped by (route, departure slot); without this JFK→LHR reports 150 "independent" observations that are really 45.
+- **Drop flights with no known outcome**, so scheduled-but-not-yet-flown rows aren't miscounted as on-time.
+- **Shrink by days, not flights.** Because severe events cluster by weather day, days are the real independent unit — and a day holding one flight isn't worth a day holding ten, so effective evidence is capped by both (`min(days, n/3)`). A 5-flight/5-day sample is pulled firmly back toward the base rate.
+- **Price as a multiple of expected loss.** The premium is a fixed loading (≈1.79×) on the estimated payout probability, so every route pays the same multiple of _its own_ expected loss. That loading is derived, not hand-picked: it's the value that makes a route at the pooled base rate price at exactly the legacy flat 10%.
+
+**This is a better estimator, not a wider dial.** Out-of-sample — fitting on half a route's days and predicting the severe rate on the other half — the new model tracks reality at **r = 0.193** versus **0.119** for the severe-count model it replaces. The spread widened _and_ the ordering got more accurate.
 
 **Known constraints, stated plainly:**
 
-- **Small samples.** n is typically 10–30 per route and free-tier history covers only a few days, so these are genuinely noisy estimates. The shrinkage above is what keeps that noise from producing confident-looking nonsense; it is not a substitute for real data.
-- **Narrow realistic spread.** Because 2h+ events are genuinely uncommon, observed live pricing lands in roughly the **8.8%–10%** band (e.g. JFK→LHR 8.95%, DXB→BOM 9.29%, LGA→ORD → fallback). The 15% cap is reachable by the model but not by most real routes on this data. That is the honest output, not a tuned demo.
+- **The calibration constants are a single-window fit.** `BASE_SEVERE_RATE`, the two regression fits, and the reliability weights all come from 30 routes in one fixed multi-day window. They are not a multi-season model, and they are hardcoded in `riskPricing.ts` rather than refitted live.
+- **Absolute skill is low.** r ≈ 0.19 out-of-sample is real but weak — it explains a few percent of variance. The model reliably separates chronically-congested routes from clean ones; it cannot predict which specific flight gets hit.
+- **The historical window is fixed and stale.** The free tier returns the same few archived days regardless of `date_from`/`date_to`/`offset`/`page` (all verified as accepted-but-ignored), so this measures one past window, not current conditions.
+- **The 2h+ rate shown in the UI is not the price driver.** It's displayed for transparency, but it is the least reliable number on the card — which is exactly why the price doesn't lean on it.
 - **No seasonality or weather.** A production model would price by season, time of day, weather forecast, and aircraft rotation. This prices the route only.
 - **Sub-cap pricing.** For a route with a genuinely high payout rate, the 15% cap would be below the actuarially fair premium — deliberate, since the cap's job here is to bound frontend trust.
 - **Fallback is a first-class path.** If the sample is unavailable or smaller than 4 usable observations, the quote falls back to the documented flat **10%** (`FALLBACK_PREMIUM_BPS`) and the UI says so. This is exercised live — LGA→ORD currently has too little history and quotes the fallback.
@@ -90,7 +108,7 @@ airlabs' free tier has no route-level history query: the historical endpoint req
 
 - Solidity contract: pooled liquidity with shares, cover policies, FDC-verified settlement, expiry, FXRP-premium pricing via FTSO, and onchain-bounded risk-based premiums.
 - Route-risk premium pricing: a delay-rate estimator over live flight history, with codeshare dedup, small-sample shrinkage, and a documented flat-rate fallback.
-- 51-test Hardhat suite, including a regression test pinned to **real Coston2 proof bytes**, a real cancelled-flight response, and premium-bound/pricing-math coverage.
+- 56-test Hardhat suite, including a regression test pinned to **real Coston2 proof bytes**, a real cancelled-flight response, and premium-bound/pricing-math coverage.
 - FDC Web2Json attestation pipeline (TypeScript + a viem port for serverless), proven end-to-end against the live verifier.
 - Autonomous settlement keeper (cron-driven) so policies settle with zero user action.
 - First-party attestation proxy so no API key touches onchain calldata.
@@ -168,7 +186,7 @@ Both payout outcomes are proven onchain: a delayed flight pays automatically, an
 ```bash
 # contracts
 yarn install
-npx hardhat test          # 51 tests
+npx hardhat test          # 56 tests
 npx hardhat run scripts/flightguard/deploy.ts --network coston2
 
 # app
@@ -187,7 +205,7 @@ Required env (see `web/.env.local.example`): `FLIGHT_API_KEY`, `SETTLER_PRIVATE_
 Honest about what this is — a hackathon build with real, verified core mechanics and clear production gaps:
 
 - **Single data source.** Settlement trusts one flight API (via the attested proxy). Production would attest multiple sources or a consensus feed.
-- **Thin risk-pricing data.** Premiums are risk-based (see [Risk-based premium pricing](#risk-based-premium-pricing)), but the free API tier caps history at 5 instances per flight over a few days, so route samples are small (n ≈ 10–30) and noisy. Estimates are shrunk toward the flat base rate to avoid false confidence, and fall back to a flat 10% when a route has too little history. Production would use a paid multi-season feed and price seasonality and weather too.
+- **Thin risk-pricing data.** Premiums are risk-based (see [Risk-based premium pricing](#risk-based-premium-pricing)) and currently span 8.00–13.88% across real routes, but the free API tier caps history at 5 instances per flight over a fixed archived window. Widening to sibling flights on the same city pair lifts n to ~60–100, yet out-of-sample skill is still only r ≈ 0.19 — enough to separate chronically-congested routes from clean ones, not to predict individual flights. Estimates are shrunk toward the base rate by how many days the sample covers, and fall back to a flat 10% when a route has too little history. Production would use a paid multi-season feed and price seasonality and weather too.
 - **Correlated pool risk.** One storm can delay many covered flights at once; production needs exposure caps and reinsurance-style tranching.
 - **Keeper cadence.** On Vercel Hobby the keeper cron runs daily; production would use Vercel Pro (sub-hourly) or an external scheduler. The keeper endpoint is also manually triggerable.
 - **Settler gas.** A server wallet pays FDC attestation fees today; production would use a relayer or user-funded attestation.

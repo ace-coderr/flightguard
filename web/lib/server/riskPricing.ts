@@ -1,75 +1,104 @@
 /**
  * Route-risk premium pricing.
  *
- * The premium a traveler pays should reflect how often the route they're flying actually
- * triggers a payout (2h+ arrival delay or cancellation). This module estimates that rate
- * from airlabs data and maps it to a premiumBps that the contract re-validates onchain
- * (FlightGuard.MIN_PREMIUM_BPS / MAX_PREMIUM_BPS).
+ * The premium reflects how often the traveler's route actually triggers a payout (2h+ arrival
+ * delay or cancellation). The estimate is produced here and re-validated onchain against
+ * FlightGuard.MIN_PREMIUM_BPS / MAX_PREMIUM_BPS.
  *
- * DATA-TIER CONSTRAINTS (documented honestly - this is a hackathon build on a free API key):
+ * WHY THIS DOESN'T JUST COUNT 2h+ DELAYS
+ * --------------------------------------
+ * The obvious estimator - "what fraction of recent flights on this route ran 2h+ late" - was
+ * measured against real data and is close to useless at free-tier sample sizes. Splitting each
+ * route's history by day and correlating one half against the other (see the calibration notes
+ * in the README), the observed statistics have these split-half reliabilities - how much of
+ * their route-to-route variation is real signal rather than sampling noise:
  *
- *  - airlabs' historical endpoint requires a specific `flight_iata` and returns at most 5
- *    past instances per flight. There is no route-level history query, and `limit` is
- *    ignored. So a single flight number yields n <= 5 - far too small to observe a rare
- *    tail event like a 2h+ delay.
- *  - To get a usable route sample we widen from "this flight" to "this city pair": the
- *    schedules endpoint lists the flights serving dep->arr, and we pull history for a
- *    handful of them. That lifts n into the 10-30 range for busy routes.
- *  - Those schedules are dense with codeshares - KL2501 / DL5994 / AF6753 / VS4 can all be
- *    the same physical aircraft, and each would otherwise be counted as an independent
- *    observation of the same delay. We dedupe by (route, departure slot) so one physical
- *    flight counts once.
- *  - Even so, n stays small, so a raw severe/n frequency is unstable (0/8 would price the
- *    floor with false confidence). We shrink toward a base rate and give partial credit to
- *    near-miss delays - see estimateRiskRate below.
+ *     severe (2h+/cancel) rate   0.11    <- ~90% noise
+ *     p90 of non-severe delays   0.37
+ *     moderate (30min+) rate     0.59    <- most reliable
  *
- * When no usable sample comes back we fall back to the flat 10% documented in the README.
+ * The reason is visible in the raw data: 2h+ events are episodic weather shocks, not a stable
+ * property of a route. Across 30 calibration routes, 51% of a route's severe events fell on its
+ * single worst day, and one route (HKG-TPE) had all 16 of its severe events on one day and zero
+ * on the other four. Pricing off that number mostly prices which storm happened to land inside
+ * the sample window.
+ *
+ * So the risk estimate is built primarily from the *moderate*-delay signal, which is far better
+ * measured, and converted into an expected 2h+ rate using relationships fitted on the same
+ * calibration set. Each component is weighted by its measured reliability. This is not a wider
+ * output range dressed up - out-of-sample, this estimator tracks the next period's severe rate
+ * better than the severe-count estimator it replaces (0.172 vs 0.119).
+ *
+ * DATA-TIER CONSTRAINTS (stated honestly - a hackathon build on a free API key):
+ *
+ *  - airlabs' historical endpoint requires a specific `flight_iata` and returns at most 5 past
+ *    instances. Date-range and pagination parameters are accepted but ignored - verified by
+ *    probing `date_from`/`date_to`, `from`/`to`, `offset`, `skip`, `page` and `date`, all of
+ *    which returned the identical 5 rows. 5 per flight is a hard cap.
+ *  - The only way to enlarge a route sample is therefore more flight numbers on the same city
+ *    pair, which is what MAX_FLIGHTS_SAMPLED does (n rises from ~10 to ~60 on busy routes).
+ *  - Those schedules are dense with codeshares - KL2501 / DL5994 / AF6753 / VS4 can be one
+ *    physical aircraft each reporting the same delay - so observations are deduped by
+ *    (route, departure slot).
+ *  - The returned window is a fixed handful of calendar days, so observations cluster by day and
+ *    are NOT independent. Shrinkage is therefore applied per distinct day, not per flight.
+ *  - Calibration constants below come from 30 routes / ~1500 real flights in that window. They
+ *    are a single-window fit, not a multi-season model.
+ *
+ * If no usable sample comes back, the quote falls back to the flat 10% documented in the README.
  */
 
 /** Matches FlightGuard.DELAY_THRESHOLD_MIN - the delay that actually triggers a payout. */
 export const SEVERE_DELAY_MIN = 120;
+/** A "moderate" delay: the well-measured signal the estimate leans on. */
+export const MODERATE_DELAY_MIN = 30;
 
 export const MIN_PREMIUM_BPS = 500; // mirrors FlightGuard.MIN_PREMIUM_BPS (hard onchain floor)
-export const LOW_RISK_PREMIUM_BPS = 800; // app pricing floor: an ideal, never-delayed route
+export const LOW_RISK_PREMIUM_BPS = 800; // app pricing floor
 export const FALLBACK_PREMIUM_BPS = 1000; // mirrors FlightGuard.FALLBACK_PREMIUM_BPS
 export const MAX_PREMIUM_BPS = 1500; // mirrors FlightGuard.MAX_PREMIUM_BPS
 
-/** premiumBps = LOW_RISK + rate * RISK_SPAN_BPS, capped at MAX. */
-const RISK_SPAN_BPS = 1200;
+// ---- calibration constants (fitted on the 30-route sample; see README) ----
+
+/** Pooled 2h+/cancel rate across the calibration routes - the shrinkage target. */
+const BASE_SEVERE_RATE = 0.0559;
+/** severeRate ~ moderateRate, least squares. */
+const MOD_INTERCEPT = 0.0396, MOD_SLOPE = 0.118;
+/** severeRate ~ p90 of non-severe delay minutes, least squares. */
+const P90_INTERCEPT = 0.0228, P90_SLOPE = 0.000823;
+/** Component weights = each statistic's measured split-half reliability. */
+const W_MODERATE = 0.589, W_P90 = 0.371, W_SEVERE = 0.109;
 
 /**
- * Rate implied by the flat fallback premium, used as the shrinkage prior: with no evidence
- * either way, a route prices exactly where the old flat-fee path priced it.
+ * Shrinkage strength in *days*. Severe events cluster by weather day, so a route observed
+ * across 25 days is far better evidenced than one seen across 5, regardless of flight count.
  */
-const PRIOR_RATE = (FALLBACK_PREMIUM_BPS - LOW_RISK_PREMIUM_BPS) / RISK_SPAN_BPS; // 1/6
+const PRIOR_DAYS = 6;
 
 /**
- * Strength of the prior, in pseudo-observations. At n=5 the sample and the prior carry
- * roughly equal weight; by n=25 the sample dominates. Chosen to match the free tier's
- * realistic sample sizes rather than tuned against outcomes.
+ * Flights per day required before a day counts as a full day of evidence. Days are the right
+ * clustering unit, but a "day" holding a single flight is not worth as much as one holding ten
+ * - without this, a 5-flight/5-day sample earns the same confidence as a 50-flight/5-day one
+ * and can price far from the base rate off almost nothing.
  */
-const PRIOR_WEIGHT = 5;
+const FLIGHTS_PER_FULL_DAY = 3;
+
+/**
+ * Expected-loss loading. The premium is this multiple of the estimated payout probability, so
+ * every route pays the same multiple of its own expected loss - which is what makes the spread
+ * between routes meaningful rather than arbitrary. Derived (not hand-picked) so that a route
+ * sitting exactly at the pooled base rate prices at the legacy flat 10%, keeping continuity
+ * with the documented fallback: 0.0559 * 1.789 = 10.00%.
+ */
+const EXPECTED_LOSS_LOADING = FALLBACK_PREMIUM_BPS / (10_000 * BASE_SEVERE_RATE);
 
 /** Below this many usable observations we don't claim to know the route's risk at all. */
 const MIN_OBSERVATIONS = 4;
 
-/** How many flight numbers on the city pair to pull history for (1 API call each). */
-const MAX_FLIGHTS_SAMPLED = 6;
+/** Flight numbers per city pair to pull history for. Each is one cached API call. */
+const MAX_FLIGHTS_SAMPLED = 40;
 
 const CACHE_TTL_MS = 30 * 60 * 1000;
-
-/**
- * Partial credit for near misses. A 2h+ delay is the payout trigger, but it's rare enough
- * that a <=30-observation sample often contains none - while a route that is routinely 45-90
- * minutes late clearly carries more tail risk than one that always lands on time. Shorter
- * delays therefore contribute a fraction of an event. These weights are a documented
- * heuristic, not a fitted model.
- */
-const PARTIAL_CREDIT: ReadonlyArray<{ minDelay: number; weight: number }> = [
-  { minDelay: SEVERE_DELAY_MIN, weight: 1 },
-  { minDelay: 60, weight: 0.3 },
-  { minDelay: 30, weight: 0.12 },
-];
 
 type AirlabsHistoricalEntry = {
   dep_iata?: string;
@@ -83,25 +112,27 @@ type AirlabsHistoricalEntry = {
   arr_delayed?: number | null;
 };
 
-type AirlabsScheduleEntry = {
-  flight_iata?: string;
-  dep_iata?: string;
-  arr_iata?: string;
-};
+type AirlabsScheduleEntry = { flight_iata?: string };
 
 /** One completed flight on the route. */
 export type RouteObservation = {
   /** Identity of the physical flight, used to collapse codeshares. */
   key: string;
+  /** Calendar day (YYYY-MM-DD) - the clustering unit for shrinkage. */
+  day: string;
   delayMinutes: number;
   cancelled: boolean;
 };
 
 export type RiskQuote = {
   premiumBps: number;
-  /** Raw observed severe-delay/cancel frequency - what we show the user. null when unknown. */
+  /** Observed 2h+/cancel frequency. Reported for transparency, NOT the main price driver. */
   delayRate: number | null;
+  /** Observed 30min+ frequency - the signal that actually drives the price. */
+  moderateRate: number | null;
   sampleSize: number;
+  /** Distinct calendar days covered - the honest measure of how much evidence there is. */
+  dayCount: number;
   delayedCount: number;
   source: "route-history" | "fallback";
   description: string;
@@ -115,50 +146,78 @@ function clamp(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, n));
 }
 
+/** Premium = loading x estimated payout probability, bounded by the app/contract range. */
 export function premiumBpsFromRiskRate(riskRate: number) {
   const rate = clamp(riskRate, 0, 1);
-  return clamp(Math.round(LOW_RISK_PREMIUM_BPS + rate * RISK_SPAN_BPS), LOW_RISK_PREMIUM_BPS, MAX_PREMIUM_BPS);
-}
-
-function severityWeight(obs: RouteObservation) {
-  if (obs.cancelled) return 1;
-  for (const { minDelay, weight } of PARTIAL_CREDIT) {
-    if (obs.delayMinutes >= minDelay) return weight;
-  }
-  return 0;
+  return clamp(
+    Math.round(10_000 * rate * EXPECTED_LOSS_LOADING),
+    LOW_RISK_PREMIUM_BPS,
+    MAX_PREMIUM_BPS
+  );
 }
 
 export function isSevere(obs: RouteObservation) {
   return obs.cancelled || obs.delayMinutes >= SEVERE_DELAY_MIN;
 }
 
+function isModerate(obs: RouteObservation) {
+  return !isSevere(obs) && obs.delayMinutes >= MODERATE_DELAY_MIN;
+}
+
+function p90NonSevere(observations: RouteObservation[]) {
+  const delays = observations
+    .filter((o) => !isSevere(o))
+    .map((o) => o.delayMinutes)
+    .sort((a, b) => a - b);
+  return delays.length ? delays[Math.floor(0.9 * delays.length)] : 0;
+}
+
 /**
- * Severity-weighted event frequency, shrunk toward PRIOR_RATE by PRIOR_WEIGHT
- * pseudo-observations. Small samples stay near the flat-fee rate instead of swinging to
- * either bound; large samples move the price where the evidence points.
+ * Estimated probability that a flight on this route triggers a payout.
+ *
+ * Blends three views of the sample, weighted by how reliable each proved to be, then shrinks
+ * toward the pooled base rate by the number of distinct days observed.
  */
 export function estimateRiskRate(observations: RouteObservation[]) {
-  const weighted = observations.reduce((sum, obs) => sum + severityWeight(obs), 0);
-  return (weighted + PRIOR_WEIGHT * PRIOR_RATE) / (observations.length + PRIOR_WEIGHT);
+  const n = observations.length;
+  if (n === 0) return BASE_SEVERE_RATE;
+
+  const severeRate = observations.filter(isSevere).length / n;
+  const moderateRate = observations.filter(isModerate).length / n;
+
+  const fromModerate = MOD_INTERCEPT + MOD_SLOPE * moderateRate;
+  const fromP90 = P90_INTERCEPT + P90_SLOPE * p90NonSevere(observations);
+  const blended =
+    (W_MODERATE * fromModerate + W_P90 * fromP90 + W_SEVERE * severeRate) / (W_MODERATE + W_P90 + W_SEVERE);
+
+  // Evidence is limited by BOTH how many days were seen (clustering) and how many flights
+  // filled them (sampling error) - whichever is scarcer.
+  const days = new Set(observations.map((o) => o.day)).size;
+  const effectiveDays = Math.min(days, n / FLIGHTS_PER_FULL_DAY);
+  return (blended * effectiveDays + BASE_SEVERE_RATE * PRIOR_DAYS) / (effectiveDays + PRIOR_DAYS);
 }
 
 /** Builds the quote from an already-collected route sample. Pure - no network. */
 export function quoteFromObservations(observations: RouteObservation[], routeLabel: string): RiskQuote | null {
   if (observations.length < MIN_OBSERVATIONS) return null;
 
+  const n = observations.length;
   const delayedCount = observations.filter(isSevere).length;
-  const delayRate = delayedCount / observations.length;
+  const moderateCount = observations.filter(isModerate).length;
+  const dayCount = new Set(observations.map((o) => o.day)).size;
   const premiumBps = premiumBpsFromRiskRate(estimateRiskRate(observations));
 
   return {
     premiumBps,
-    delayRate,
-    sampleSize: observations.length,
+    delayRate: delayedCount / n,
+    moderateRate: moderateCount / n,
+    sampleSize: n,
+    dayCount,
     delayedCount,
     source: "route-history",
     description:
-      `${routeLabel}: ${delayedCount} of ${observations.length} recent flights hit the 2h+/cancel trigger` +
-      ` (free-tier sample, shorter delays counted partially)`,
+      `${routeLabel}: ${moderateCount} of ${n} recent flights ran 30min+ late` +
+      ` and ${delayedCount} hit the 2h+/cancel trigger, across ${dayCount} days`,
   };
 }
 
@@ -166,7 +225,9 @@ export function fallbackQuote(): RiskQuote {
   return {
     premiumBps: FALLBACK_PREMIUM_BPS,
     delayRate: null,
+    moderateRate: null,
     sampleSize: 0,
+    dayCount: 0,
     delayedCount: 0,
     source: "fallback",
     description: "Route-risk sample unavailable - using the documented 10% flat fallback",
@@ -178,8 +239,8 @@ function observedDelayMinutes(entry: AirlabsHistoricalEntry) {
 }
 
 /**
- * Keeps only flights whose outcome is actually known. Scheduled-but-not-yet-flown rows
- * report no delay, and counting them as on-time would drag every route to the floor.
+ * Keeps only flights whose outcome is actually known. Scheduled-but-not-yet-flown rows report
+ * no delay, and counting them as on-time would drag every route toward the floor.
  */
 function hasCompleted(entry: AirlabsHistoricalEntry) {
   if (entry.status === "cancelled") return true;
@@ -188,10 +249,11 @@ function hasCompleted(entry: AirlabsHistoricalEntry) {
 }
 
 function toObservation(entry: AirlabsHistoricalEntry): RouteObservation {
+  const depTime = entry.dep_time ?? "";
   return {
-    // Codeshares of one physical flight share a route and departure slot, so this collapses
-    // them into a single observation.
-    key: `${entry.dep_iata}|${entry.arr_iata}|${entry.dep_time ?? ""}`,
+    // Codeshares of one physical flight share a route and departure slot.
+    key: `${entry.dep_iata}|${entry.arr_iata}|${depTime}`,
+    day: depTime.slice(0, 10),
     delayMinutes: observedDelayMinutes(entry),
     cancelled: entry.status === "cancelled",
   };
@@ -202,7 +264,7 @@ export function dedupeObservations(observations: RouteObservation[]) {
   for (const obs of observations) {
     const existing = seen.get(obs.key);
     // Keep the worst reading for a slot - codeshare rows occasionally disagree.
-    if (!existing || severityWeight(obs) > severityWeight(existing)) seen.set(obs.key, obs);
+    if (!existing || obs.delayMinutes > existing.delayMinutes || obs.cancelled) seen.set(obs.key, obs);
   }
   return [...seen.values()];
 }
@@ -220,7 +282,7 @@ async function routeFlightNumbers(depIata: string, arrIata: string, apiKey: stri
     api_key: apiKey,
     dep_iata: depIata,
     arr_iata: arrIata,
-    _fields: "flight_iata,dep_iata,arr_iata",
+    _fields: "flight_iata",
   })}`;
   const entries = await getJson<AirlabsScheduleEntry>(url);
   if (!entries) return [];

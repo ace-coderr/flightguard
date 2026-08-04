@@ -33,7 +33,9 @@ type Quote = {
   premium: bigint;
   premiumBps: number;
   delayRate: number | null;
+  moderateRate: number | null;
   riskSampleSize: number;
+  riskDayCount: number;
   riskDelayedCount: number;
   riskSource: "route-history" | "fallback";
   riskDescription: string;
@@ -202,7 +204,9 @@ function CoverForm() {
         premium,
         premiumBps,
         delayRate: typeof data.delayRate === "number" ? data.delayRate : null,
+        moderateRate: typeof data.moderateRate === "number" ? data.moderateRate : null,
         riskSampleSize: Number(data.riskSampleSize ?? 0),
+        riskDayCount: Number(data.riskDayCount ?? 0),
         riskDelayedCount: Number(data.riskDelayedCount ?? 0),
         riskSource: data.riskSource ?? "fallback",
         riskDescription: data.riskDescription ?? "Route-risk sample unavailable - using the documented 10% flat fallback",
@@ -526,10 +530,16 @@ function CoverForm() {
 
                 <div className="text-xs text-white/50">
                   Premium: {formatPremiumBps(quote.premiumBps)}
-                  {quote.delayRate !== null
-                    ? ` - this route has a ${formatDelayRate(quote.delayRate)} observed 2h+ delay/cancel rate`
+                  {quote.moderateRate !== null
+                    ? ` - ${formatDelayRate(quote.moderateRate)} of recent flights on this route ran 30min+ late`
                     : " - route-risk data unavailable"}
                 </div>
+                {quote.riskSource !== "fallback" && (
+                  <div className="mt-0.5 text-xs text-white/40">
+                    Based on {quote.riskSampleSize} historical flights across {quote.riskDayCount} days on this route
+                    {quote.delayRate !== null && `; ${quote.riskDelayedCount} hit the 2h+/cancel trigger`}
+                  </div>
+                )}
                 {payWith === "USDT0" ? (
                   <div className="font-mono text-3xl font-semibold text-brand sm:text-4xl">
                     {formatAmount(quote.premium)} <span className="text-lg text-white/50">USDT0</span>
@@ -557,9 +567,9 @@ function CoverForm() {
                   </>
                 )}
                 <p className="mt-1 text-xs text-white/40">
-                  {quote.riskDescription}
-                  {quote.riskSource !== "fallback" &&
-                    " Small free-tier samples are shrunk toward the 10% base rate, so a thin sample never prices the floor outright."}
+                  {quote.riskSource === "fallback"
+                    ? quote.riskDescription
+                    : "2h+ delays are episodic weather events and too rare to measure reliably in a free-tier sample, so the price leans on the far better-measured 30min+ rate and is shrunk toward the 10% base rate by how many days the sample covers."}
                 </p>
               </div>
 
