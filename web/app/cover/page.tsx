@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useAccount, useReadContract, useWaitForTransactionReceipt, useWriteContract } from "wagmi";
 import { formatUnits, parseUnits } from "viem";
-import { flightGuardConfig, usdt0Config, fxrpConfig, MAX_COVER, USDT0_DECIMALS } from "@/lib/contracts";
+import { flightGuardConfig, usdt0Config, fxrpConfig, MAX_COVER, MAX_PREMIUM_BPS, USDT0_DECIMALS } from "@/lib/contracts";
 import { formatAmount, formatDate, formatUtcTime } from "@/lib/format";
 import { ExplorerLink } from "@/components/ExplorerLink";
 
@@ -59,6 +59,51 @@ const DEFAULT_DEEP_LINK_COVER_AMOUNT = "100";
 function formatPremiumBps(bps: number) {
   const pct = bps / 100;
   return Number.isInteger(pct) ? `${pct}%` : `${pct.toFixed(1)}%`;
+}
+
+/**
+ * A cover amount the pool can actually back right now. The old flat 100 default produced an
+ * unbuyable quote (Buy disabled, "exceeds pool capacity") the moment free liquidity dropped
+ * below it — which is exactly what the one-click "try a coverable flight" path hit. Prefilling
+ * from live capacity means the fastest route through the page always ends in a buyable quote.
+ */
+function suggestedCoverAmount(freeLiquidity: bigint | undefined): string {
+  if (freeLiquidity === undefined || freeLiquidity <= 0n) return DEFAULT_DEEP_LINK_COVER_AMOUNT;
+  const usable = freeLiquidity < MAX_COVER ? freeLiquidity : MAX_COVER;
+  const wholeUnits = usable / 10n ** BigInt(USDT0_DECIMALS);
+  if (wholeUnits >= 100n) return DEFAULT_DEEP_LINK_COVER_AMOUNT;
+  if (wholeUnits > 0n) return wholeUnits.toString();
+  // Sub-unit capacity: offer what's there rather than something guaranteed to be rejected.
+  return formatUnits(usable, USDT0_DECIMALS);
+}
+
+/** Compact 2-state asset picker; two of these on one line replace the old stacked toggles. */
+function AssetToggle({
+  value,
+  onChange,
+  label,
+}: {
+  value: "USDT0" | "FXRP";
+  onChange: (v: "USDT0" | "FXRP") => void;
+  label: string;
+}) {
+  return (
+    <div className="flex gap-0.5 rounded-full bg-white/10 p-0.5 font-mono text-xs" role="group" aria-label={label}>
+      {(["USDT0", "FXRP"] as const).map((option) => (
+        <button
+          key={option}
+          type="button"
+          aria-pressed={value === option}
+          onClick={() => onChange(option)}
+          className={`rounded-full px-2.5 py-1 transition-colors ${
+            value === option ? "bg-brand text-white" : "text-white/60 hover:text-white"
+          }`}
+        >
+          {option}
+        </button>
+      ))}
+    </div>
+  );
 }
 
 function formatDelayRate(rate: number | null) {
@@ -119,12 +164,24 @@ function CoverForm() {
     | readonly [bigint, bigint, bigint, bigint]
     | undefined) ?? [undefined, undefined, undefined, undefined];
 
-  // buyCoverWithFXRP recomputes the FXRP amount from the live FTSO price at execution time,
-  // which is a block or two after this preview. If XRP/USD ticks down in between, the exact
-  // previewed amount is no longer enough and the buy reverts with a raw "ERC20: insufficient
-  // allowance". Approving a small headroom above the quote absorbs that drift - only the
-  // amount the contract actually charges is ever transferred.
-  const fxrpApprovalAmount = fxrpAmount === undefined ? undefined : (fxrpAmount * 102n) / 100n;
+  // Approve with real headroom rather than the exact quote, for two reasons. First,
+  // buyCoverWithFXRP recomputes the FXRP amount from the live FTSO price a block or two after
+  // this preview, so approving the exact figure reverts with a raw "ERC20: insufficient
+  // allowance" whenever XRP/USD ticks down in between. Second, approving exactly the premium
+  // burns the allowance on every purchase, so a repeat buyer pays two transactions forever;
+  // one wide approval makes every later purchase a single transaction.
+  //
+  // The ceiling is the largest premium the contract could ever charge for one policy
+  // (MAX_COVER at MAX_PREMIUM_BPS), so it is bounded by the contract's own limits rather than
+  // being unlimited. Only what the contract actually charges is ever transferred.
+  const maxPremiumUsdt0 = (MAX_COVER * BigInt(MAX_PREMIUM_BPS)) / 10_000n;
+  const usdt0ApprovalAmount = quote ? (quote.premium > maxPremiumUsdt0 ? quote.premium : maxPremiumUsdt0) : undefined;
+  // Same ceiling expressed in FXRP, scaled through the live quote so it tracks the FTSO rate
+  // instead of hardcoding an XRP price.
+  const fxrpApprovalAmount =
+    fxrpAmount === undefined || !quote || quote.premium === 0n
+      ? undefined
+      : (fxrpAmount * maxPremiumUsdt0) / quote.premium;
 
   // Estimated FXRP payout for the cover amount. Deliberately labelled as an estimate in the
   // UI: settle() re-reads XRP/USD inside the settlement transaction, so what actually lands
@@ -255,7 +312,9 @@ function CoverForm() {
 
   async function handleCoverableClick(flight: CoverableFlight) {
     setFlightIata(flight.flightIata);
-    const coverAmount = coverAmountInput || DEFAULT_DEEP_LINK_COVER_AMOUNT;
+    // Prefill from live pool capacity, not a flat 100 - one click has to land on a quote the
+    // user can actually buy.
+    const coverAmount = coverAmountInput || suggestedCoverAmount(freeLiquidity);
     setCoverAmountInput(coverAmount);
     await runQuote(flight.flightIata, coverAmount);
   }
@@ -308,10 +367,11 @@ function CoverForm() {
       writeApprove({ ...fxrpConfig, functionName: "approve", args: [flightGuardConfig.address, fxrpApprovalAmount] });
       return;
     }
+    if (usdt0ApprovalAmount === undefined) return;
     writeApprove({
       ...usdt0Config,
       functionName: "approve",
-      args: [flightGuardConfig.address, quote.premium],
+      args: [flightGuardConfig.address, usdt0ApprovalAmount],
     });
   }
 
@@ -341,6 +401,42 @@ function CoverForm() {
     else refetchUsdt0Allowance();
   }, [isApproveConfirmed, payWith, refetchFxrpAllowance, refetchUsdt0Allowance]);
 
+  // One button, two on-chain steps. `purchasing` is the user's single intent to buy; the
+  // effect below carries it across the approval into the buy so they press once and just
+  // confirm in the wallet, instead of hunting for a second button between two popups.
+  const [purchasing, setPurchasing] = useState(false);
+
+  function handlePurchase() {
+    if (!quote) return;
+    setPurchasing(true);
+    if (needsApproval) handleApprove();
+    else handleBuyCover();
+  }
+
+  useEffect(() => {
+    // Advance to the buy the moment the approval confirms. buyCoverHash guards against
+    // re-firing on later re-renders once the buy is already submitted.
+    if (!purchasing || !isApproveConfirmed || buyCoverHash) return;
+    handleBuyCover();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [purchasing, isApproveConfirmed, buyCoverHash]);
+
+  // Any failure hands control back to the user rather than leaving a button spinning.
+  useEffect(() => {
+    if (buyCoverError) setPurchasing(false);
+  }, [buyCoverError]);
+
+  const approveStepDone = !needsApproval || isApproveConfirmed;
+  const isPurchaseBusy =
+    purchasing && (isApprovePending || isApproveConfirming || isBuyCoverPending || isBuyCoverConfirming);
+  const purchaseLabel = !purchasing
+    ? "Buy cover"
+    : isApprovePending || isApproveConfirming
+      ? `Approving ${payWith}…`
+      : isBuyCoverPending || isBuyCoverConfirming
+        ? "Buying cover…"
+        : "Buy cover";
+
   // Gentle auto-redirect to My Policies once the buyCover tx is confirmed onchain -
   // the "View in My Policies" button is available immediately for anyone who doesn't
   // want to wait.
@@ -355,6 +451,7 @@ function CoverForm() {
     setQuoteError(null);
     setFlightIata("");
     setCoverAmountInput("");
+    setPurchasing(false);
     resetApprove();
     resetBuyCover();
   }
@@ -382,8 +479,12 @@ function CoverForm() {
               <button
                 key={flight.flightIata}
                 type="button"
+                // Disabled until live capacity is known: this button picks the cover amount on
+                // the user's behalf, and picking one the pool can't back lands them straight in
+                // a quote with Buy disabled. Sub-second wait, no wrong answer.
+                disabled={freeLiquidity === undefined}
                 onClick={() => void handleCoverableClick(flight)}
-                className="rounded-full border border-ink/15 bg-white px-3 py-1.5 font-mono text-xs font-semibold text-ink transition-colors hover:border-ink hover:bg-ink hover:text-white"
+                className="rounded-full border border-ink/15 bg-white px-3 py-1.5 font-mono text-xs font-semibold text-ink transition-colors hover:border-ink hover:bg-ink hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
               >
                 {flight.flightIata}
                 {flight.depIata && flight.arrIata ? ` · ${flight.depIata}→${flight.arrIata}` : ""}
@@ -399,51 +500,52 @@ function CoverForm() {
       </div>
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-[2fr_1fr]">
+        {/* Both inputs and the action sit on one row, so the lookup and the quote read as a
+            single step rather than a form you fill and then a separate thing you trigger. */}
         <form
           onSubmit={handleQuote}
-          className="flex flex-col gap-5 self-start rounded-2xl border border-ink/10 bg-white p-6 sm:p-8"
+          className="flex flex-col gap-4 self-start rounded-2xl border border-ink/10 bg-white p-6 sm:p-8"
         >
-          <label className="flex flex-col gap-1.5 text-sm text-muted">
-            Flight number (IATA)
-            <input
-              required
-              placeholder="BA75"
-              value={flightIata}
-              onChange={(e) => setFlightIata(e.target.value)}
-              className={`${inputClass} font-mono uppercase placeholder:normal-case`}
-            />
-          </label>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-[1fr_1fr_auto] sm:items-end">
+            <label className="flex flex-col gap-1.5 text-sm text-muted">
+              Flight number
+              <input
+                required
+                placeholder="BA75"
+                value={flightIata}
+                onChange={(e) => setFlightIata(e.target.value)}
+                className={`${inputClass} font-mono uppercase placeholder:normal-case`}
+              />
+            </label>
+            <label className="flex flex-col gap-1.5 text-sm text-muted">
+              Cover amount (USDT0)
+              <input
+                required
+                type="number"
+                min="0"
+                step="0.01"
+                placeholder={suggestedCoverAmount(freeLiquidity)}
+                value={coverAmountInput}
+                onChange={(e) => setCoverAmountInput(e.target.value)}
+                className={`${inputClass} font-mono`}
+              />
+            </label>
+            <button type="submit" disabled={isQuoting} className={`${primaryButtonClass} sm:mb-0`}>
+              {isQuoting ? "Quoting…" : "Get quote"}
+            </button>
+          </div>
+
+          <p className="text-xs text-muted">
+            Pool can back up to {freeLiquidity !== undefined ? formatAmount(freeLiquidity) : "…"} USDT0 right now ·
+            underwritten by <ExplorerLink address={flightGuardConfig.address} />
+          </p>
+
           {isDeepLink && !quote && !quoteError && (
             <p className="text-xs text-muted">
-              Prefilled from Delay Radar. Hit &quot;Get quote&quot; and we&apos;ll look up that flight&apos;s real next
-              scheduled arrival with live data.
+              Prefilled from Delay Radar — we&apos;ll look up this flight&apos;s real next scheduled arrival live.
             </p>
           )}
-          <label className="flex flex-col gap-1.5 text-sm text-muted">
-            Cover amount (USDT0)
-            <input
-              required
-              type="number"
-              min="0"
-              step="0.01"
-              placeholder="100"
-              value={coverAmountInput}
-              onChange={(e) => setCoverAmountInput(e.target.value)}
-              className={`${inputClass} font-mono`}
-            />
-            <span className="text-xs text-muted">
-              Pool can back up to {freeLiquidity !== undefined ? formatAmount(freeLiquidity) : "…"} USDT0 right now.
-            </span>
-          </label>
           {quoteError && <p className="text-sm text-brand">{quoteError}</p>}
-          <button type="submit" disabled={isQuoting} className={primaryButtonClass}>
-            {isQuoting ? "Getting quote..." : "Get quote"}
-          </button>
-
-          <p className="mt-2 border-t border-ink/10 pt-5 text-xs text-muted">
-            Cover is underwritten by the FlightGuard pool contract:{" "}
-            <ExplorerLink address={flightGuardConfig.address} />
-          </p>
         </form>
 
         <div className="lg:sticky lg:top-24 lg:self-start">
@@ -521,166 +623,141 @@ function CoverForm() {
           )}
 
           {quote && !isBuyCoverConfirmed && (
-            <div className="flex flex-col gap-5 rounded-2xl bg-ink p-6 text-white sm:p-8">
-              <div className="flex items-center justify-between">
-                <h2 className="font-semibold">Quote</h2>
-                <span className="font-mono text-xs text-white/50">
-                  {quote.flightIata} · {quote.date}
+            <div className="flex flex-col gap-4 rounded-2xl bg-ink p-6 text-white sm:p-8">
+              {/* Flight identity, date and arrival on one line. These were previously three
+                  separate blocks restating each other. */}
+              <div className="flex items-start justify-between gap-3 border-b border-white/10 pb-4">
+                <div className="font-mono text-sm">
+                  <div className="text-base font-semibold">
+                    {quote.flightIata}
+                    {quote.depIata && quote.arrIata ? ` · ${quote.depIata}→${quote.arrIata}` : ""}
+                  </div>
+                  <div className="mt-0.5 text-white/60">
+                    {quote.date}
+                    {quote.arrTimeUtc ? ` · arrives ${formatUtcTime(quote.arrTimeUtc)} UTC` : ""} · {quote.status}
+                  </div>
+                </div>
+                <span
+                  title="Date and arrival come from live flight data — this is the flight you're covering."
+                  className="shrink-0 rounded-full bg-white/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-widest text-white/60"
+                >
+                  live
                 </span>
               </div>
 
-              <div className="rounded-lg bg-white/5 px-3 py-2 font-mono text-sm">
-                {quote.flightIata}
-                {quote.depIata && quote.arrIata ? ` · ${quote.depIata}→${quote.arrIata}` : ""}
-                {quote.arrTimeUtc ? ` · arrives ${formatUtcTime(quote.arrTimeUtc)}` : ""}
-                <div className="mt-1 text-xs uppercase tracking-wide text-white/50">
-                  Confirm this is your flight before buying · status: {quote.status}
-                </div>
-              </div>
-
-              <div className="rounded-lg border border-brand/40 bg-brand/10 px-3 py-3 text-sm">
-                <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
-                  <dt className="text-white/60">Flight date:</dt>
-                  <dd className="text-right font-mono font-semibold text-white">{quote.date}</dd>
-                  <dt className="text-white/60">Scheduled arrival:</dt>
-                  <dd className="text-right font-mono font-semibold text-white">
-                    {formatDate(quote.scheduledArrival)}
-                    {quote.arrTimeUtc ? `, ${formatUtcTime(quote.arrTimeUtc)}` : ""}
+              {/* The entire decision in three lines: what leaves your wallet, what you're
+                  covered for, what comes back if the flight goes wrong. */}
+              <dl className="flex flex-col gap-2.5 text-sm">
+                <div className="flex items-baseline justify-between gap-3">
+                  <dt className="text-white/50">You pay</dt>
+                  <dd className="text-right font-mono text-2xl font-semibold text-brand">
+                    {payWith === "USDT0" ? (
+                      <>
+                        {formatAmount(quote.premium)} <span className="text-sm text-white/50">USDT0</span>
+                      </>
+                    ) : (
+                      <>
+                        {fxrpAmount !== undefined ? Number(formatUnits(fxrpAmount, 6)).toFixed(4) : "…"}{" "}
+                        <span className="text-sm text-white/50">FXRP</span>
+                      </>
+                    )}
+                    <span className="ml-2 align-middle text-xs font-normal text-white/40">
+                      {formatPremiumBps(quote.premiumBps)}
+                    </span>
                   </dd>
-                </dl>
-                <p className="mt-2 text-xs text-white/60">
-                  Date and arrival are taken from live flight data for {quote.flightIata} — this is the flight
-                  you&apos;re covering.
-                </p>
-              </div>
-
-              <div>
-                <div className="mb-2 flex items-center justify-between">
-                  <span className="text-xs text-white/50">Pay premium in</span>
-                  <div className="flex gap-1 rounded-full bg-white/10 p-1 font-mono text-xs">
-                    {(["USDT0", "FXRP"] as const).map((option) => (
-                      <button
-                        key={option}
-                        type="button"
-                        onClick={() => setPayWith(option)}
-                        className={`rounded-full px-3 py-1 transition-colors ${
-                          payWith === option ? "bg-brand text-white" : "text-white/60 hover:text-white"
-                        }`}
-                      >
-                        {option}
-                      </button>
-                    ))}
-                  </div>
                 </div>
-
-                <div className="text-xs text-white/50">
-                  Premium: {formatPremiumBps(quote.premiumBps)}
-                  {quote.moderateRate !== null
-                    ? ` - ${formatDelayRate(quote.moderateRate)} of recent flights on this route ran 30min+ late`
-                    : " - route-risk data unavailable"}
+                <div className="flex items-baseline justify-between gap-3">
+                  <dt className="text-white/50">You&apos;re covered for</dt>
+                  <dd className="text-right font-mono">{formatAmount(quote.coverAmount)} USDT0</dd>
                 </div>
-                {quote.riskSource !== "fallback" && (
-                  <div className="mt-0.5 text-xs text-white/40">
-                    Based on {quote.riskSampleSize} historical flights across {quote.riskDayCount} days on this route
-                    {quote.delayRate !== null && `; ${quote.riskDelayedCount} hit the 2h+/cancel trigger`}
-                  </div>
-                )}
-                {payWith === "USDT0" ? (
-                  <div className="font-mono text-3xl font-semibold text-brand sm:text-4xl">
-                    {formatAmount(quote.premium)} <span className="text-lg text-white/50">USDT0</span>
-                  </div>
-                ) : (
-                  <>
-                    <div className="font-mono text-3xl font-semibold text-brand sm:text-4xl">
-                      {fxrpAmount !== undefined ? Number(formatUnits(fxrpAmount, 6)).toFixed(4) : "..."}{" "}
-                      <span className="text-lg text-white/50">FXRP</span>
-                    </div>
-                    <div className="mt-1 font-mono text-xs text-white/50">
-                      ≈ {formatAmount(quote.premium)} USDT0
+                <div className="flex items-baseline justify-between gap-3">
+                  <dt className="text-white/50">If 2h+ late or cancelled</dt>
+                  <dd className="text-right font-mono">
+                    {payoutIn === "USDT0"
+                      ? `${formatAmount(quote.coverAmount)} USDT0`
+                      : `≈ ${payoutFxrpAmount !== undefined ? Number(formatUnits(payoutFxrpAmount, 6)).toFixed(4) : "…"} FXRP`}
+                  </dd>
+                </div>
+              </dl>
+
+              {/* Route-risk methodology and the FXRP proxy-feed rationale are still here in
+                  full, just folded away — they were three always-open paragraphs sitting
+                  between the price and the button. */}
+              <details className="group border-t border-white/10 pt-3 text-xs text-white/50">
+                <summary className="cursor-pointer list-none font-medium text-white/60 transition-colors hover:text-white">
+                  <span aria-hidden className="mr-1 inline-block transition-transform group-open:rotate-90">
+                    ▸
+                  </span>
+                  Why {formatPremiumBps(quote.premiumBps)}, and how is this priced?
+                </summary>
+                <div className="mt-2 flex flex-col gap-2 pl-4">
+                  <p>
+                    {quote.moderateRate !== null
+                      ? `${formatDelayRate(quote.moderateRate)} of recent flights on this route ran 30min+ late.`
+                      : "Route-risk data unavailable."}
+                    {quote.riskSource !== "fallback" &&
+                      ` Based on ${quote.riskSampleSize} historical flights across ${quote.riskDayCount} days on this route${
+                        quote.delayRate !== null ? `; ${quote.riskDelayedCount} hit the 2h+/cancel trigger` : ""
+                      }.`}
+                  </p>
+                  <p>
+                    {quote.riskSource === "fallback"
+                      ? quote.riskDescription
+                      : "2h+ delays are episodic weather events and too rare to measure reliably in a free-tier sample, so the price leans on the far better-measured 30min+ rate and is shrunk toward the 10% base rate by how many days the sample covers."}
+                  </p>
+                  {(payWith === "FXRP" || payoutIn === "FXRP") && (
+                    <p>
+                      FXRP has no FTSO feed of its own — it&apos;s priced via the underlying XRP/USD feed, since FXRP is
+                      1:1 collateralized against real XRP.
                       {xrpUsdPriceWei !== undefined && usdtUsdPriceWei !== undefined && (
                         <>
                           {" "}
-                          @ FTSO rate (XRP/USD ${Number(formatUnits(xrpUsdPriceWei, 18)).toFixed(4)}, USDT/USD $
-                          {Number(formatUnits(usdtUsdPriceWei, 18)).toFixed(4)})
+                          Live now: XRP/USD ${Number(formatUnits(xrpUsdPriceWei, 18)).toFixed(4)}, USDT/USD $
+                          {Number(formatUnits(usdtUsdPriceWei, 18)).toFixed(4)}.
                         </>
                       )}
-                    </div>
-                    <p className="mt-1 text-xs text-white/40">
-                      FXRP has no FTSO feed of its own - priced via the underlying XRP/USD feed, since FXRP is 1:1
-                      collateralized against real XRP.
                     </p>
-                  </>
-                )}
-                <p className="mt-1 text-xs text-white/40">
-                  {quote.riskSource === "fallback"
-                    ? quote.riskDescription
-                    : "2h+ delays are episodic weather events and too rare to measure reliably in a free-tier sample, so the price leans on the far better-measured 30min+ rate and is shrunk toward the 10% base rate by how many days the sample covers."}
-                </p>
-              </div>
-
-              <div className="border-t border-white/10 pt-5">
-                <div className="mb-2 flex items-center justify-between">
-                  <span className="text-xs text-white/50">Receive payout in</span>
-                  <div className="flex gap-1 rounded-full bg-white/10 p-1 font-mono text-xs">
-                    {(["USDT0", "FXRP"] as const).map((option) => (
-                      <button
-                        key={option}
-                        type="button"
-                        onClick={() => setPayoutIn(option)}
-                        className={`rounded-full px-3 py-1 transition-colors ${
-                          payoutIn === option ? "bg-brand text-white" : "text-white/60 hover:text-white"
-                        }`}
-                      >
-                        {option}
-                      </button>
-                    ))}
-                  </div>
+                  )}
+                  {payoutIn === "FXRP" && (
+                    <p>
+                      The FXRP payout figure is an estimate. Your cover stays {formatAmount(quote.coverAmount)} USDT0 of
+                      value — the contract converts it at the FTSO rate read inside the settlement transaction itself, so
+                      the exact FXRP you receive is priced when the flight settles, not now.
+                      {payoutXrpPriceWei !== undefined && payoutUsdtPriceWei !== undefined && (
+                        <>
+                          {" "}
+                          The estimate above uses XRP/USD ${Number(formatUnits(payoutXrpPriceWei, 18)).toFixed(4)} and
+                          USDT/USD ${Number(formatUnits(payoutUsdtPriceWei, 18)).toFixed(4)}, read just now.
+                        </>
+                      )}
+                    </p>
+                  )}
+                  <p>Scheduled arrival by {formatDate(quote.scheduledArrival)}.</p>
                 </div>
+              </details>
 
-                {payoutIn === "USDT0" ? (
-                  <p className="text-xs text-white/50">
-                    A delay or cancellation pays {formatAmount(quote.coverAmount)} USDT0 straight from the pool.
-                  </p>
-                ) : (
-                  <>
-                    <div className="font-mono text-lg text-white">
-                      ≈ {payoutFxrpAmount !== undefined ? Number(formatUnits(payoutFxrpAmount, 6)).toFixed(4) : "..."}{" "}
-                      <span className="text-sm text-white/50">FXRP</span>
-                      <span className="ml-1 text-sm text-white/50">
-                        for {formatAmount(quote.coverAmount)} USDT0 of cover
-                      </span>
-                    </div>
-                    {payoutXrpPriceWei !== undefined && payoutUsdtPriceWei !== undefined && (
-                      <div className="mt-1 font-mono text-xs text-white/50">
-                        @ FTSO rate right now (XRP/USD ${Number(formatUnits(payoutXrpPriceWei, 18)).toFixed(4)}, USDT/USD
-                        ${Number(formatUnits(payoutUsdtPriceWei, 18)).toFixed(4)})
-                      </div>
-                    )}
-                    <p className="mt-1 text-xs text-white/40">
-                      Estimate only. Your cover stays {formatAmount(quote.coverAmount)} USDT0 of value — the contract
-                      converts it to FXRP at the FTSO rate read inside the settlement transaction itself, so the exact
-                      FXRP you receive is priced when the flight settles, not now.
-                    </p>
-                    {reserveMayBeShort && (
-                      <p className="mt-2 text-xs text-brand">
-                        FXRP payout reserve currently holds{" "}
-                        {fxrpPayoutReserve !== undefined ? Number(formatUnits(fxrpPayoutReserve, 6)).toFixed(4) : "…"}{" "}
-                        FXRP — less than this payout needs. If it is still short at settlement, the contract pays you in
-                        USDT0 instead. Your claim is never at risk either way.
-                      </p>
-                    )}
-                  </>
-                )}
+              {/* Both asset choices on one line. They stay independent — all four
+                  combinations are valid — and the arrow carries the direction. */}
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-2 border-t border-white/10 pt-4 text-xs">
+                <span className="text-white/50">Pay</span>
+                <AssetToggle value={payWith} onChange={setPayWith} label="Premium asset" />
+                <span aria-hidden className="px-0.5 text-white/30">
+                  →
+                </span>
+                <span className="text-white/50">Receive</span>
+                <AssetToggle value={payoutIn} onChange={setPayoutIn} label="Payout asset" />
               </div>
 
-              <dl className="grid grid-cols-2 gap-y-2 border-t border-white/10 pt-4 text-sm">
-                <dt className="text-white/50">Cover amount</dt>
-                <dd className="text-right font-mono">{formatAmount(quote.coverAmount)} USDT0</dd>
-                <dt className="text-white/50">Payout asset</dt>
-                <dd className="text-right font-mono">{payoutIn}</dd>
-                <dt className="text-white/50">Scheduled arrival by</dt>
-                <dd className="text-right font-mono">{formatDate(quote.scheduledArrival)}</dd>
-              </dl>
+              {/* Kept prominent rather than folded into the disclosure: it changes which asset
+                  actually lands in the wallet, so it isn't background detail. */}
+              {reserveMayBeShort && (
+                <p className="text-xs text-brand">
+                  FXRP payout reserve holds only{" "}
+                  {fxrpPayoutReserve !== undefined ? Number(formatUnits(fxrpPayoutReserve, 6)).toFixed(4) : "…"} FXRP —
+                  if it&apos;s still short at settlement you&apos;re paid in USDT0 instead. Your claim is never at risk
+                  either way.
+                </p>
+              )}
 
               {exceedsFreeLiquidity && (
                 <p className="text-sm text-brand">
@@ -695,27 +772,30 @@ function CoverForm() {
 
               {!isConnected && <p className="text-sm text-white/60">Connect your wallet to continue.</p>}
 
+              {/* One button, one intent. Approving and buying are still two on-chain
+                  transactions — that's the contract's shape and isn't changing — but the user
+                  presses once and just confirms in the wallet, with the step readout below
+                  saying where they are instead of a second button appearing between popups. */}
               {isConnected && (
-                <div className="flex flex-col gap-3">
-                  {needsApproval ? (
-                    <button
-                      onClick={handleApprove}
-                      disabled={
-                        isApprovePending || isApproveConfirming || (payWith === "FXRP" && fxrpAmount === undefined)
-                      }
-                      className={darkButtonClass}
-                    >
-                      {isApprovePending || isApproveConfirming ? "Approving..." : `Approve ${payWith}`}
-                    </button>
-                  ) : (
-                    <button
-                      onClick={handleBuyCover}
-                      disabled={isBuyCoverPending || isBuyCoverConfirming || exceedsFreeLiquidity}
-                      className={darkButtonClass}
-                    >
-                      {isBuyCoverPending || isBuyCoverConfirming ? "Buying cover..." : "Buy cover"}
-                    </button>
-                  )}
+                <div className="flex flex-col gap-2 border-t border-white/10 pt-4">
+                  <button
+                    onClick={handlePurchase}
+                    disabled={
+                      isPurchaseBusy ||
+                      exceedsFreeLiquidity ||
+                      (payWith === "FXRP" && fxrpAmount === undefined)
+                    }
+                    className={darkButtonClass}
+                  >
+                    {purchaseLabel}
+                  </button>
+                  <div className="flex items-center justify-center gap-2 font-mono text-[11px] text-white/40">
+                    <span className={approveStepDone ? "text-brand" : purchasing ? "text-white/70" : ""}>
+                      {approveStepDone ? "✓" : "①"} {needsApproval ? `approve ${payWith}` : "approved"}
+                    </span>
+                    <span aria-hidden>→</span>
+                    <span className={purchasing && approveStepDone ? "text-white/70" : ""}>② confirm cover</span>
+                  </div>
                   {buyCoverError && <p className="text-sm text-brand">{buyCoverError.message}</p>}
                 </div>
               )}
