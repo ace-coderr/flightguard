@@ -123,7 +123,9 @@ async function main() {
 
     // 4. Settle
     const holderBalanceBefore = BigInt((await token.balanceOf(account)).toString());
-    const settleTx = await flightGuard.settle(policyId, settleProof, { from: account });
+    // Explicit gas: the FXRP-payout branch (two FTSO reads + an FAsset transfer) can exceed a
+    // bare estimate, and falling short reverts the whole settlement rather than degrading.
+    const settleTx = await flightGuard.settle(policyId, settleProof, { from: account, gas: 1_000_000 });
     console.log("Settle tx:", settleTx.tx, "\n");
     const holderBalanceAfter = BigInt((await token.balanceOf(account)).toString());
 

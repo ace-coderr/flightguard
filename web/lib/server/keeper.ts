@@ -152,12 +152,29 @@ async function settleOnePolicy(
         }
 
         log(policyId, "proof ready, submitting settle()");
+        // settle() is submitted with an explicit gas buffer rather than a bare estimate.
+        // The FXRP-payout branch is materially heavier than the USDT0 one - two FtsoV2 feed
+        // reads plus an FAsset transfer, whose cost depends on state the estimate is taken
+        // against - and an estimate that lands a few percent short doesn't fail cleanly: the
+        // 63/64 rule starves the inner call, the try/catch'd FTSO read or the token transfer
+        // runs out of gas, and the whole settlement reverts having burned ~99% of the limit.
+        // (Observed live: gasLimit 335349 / gasUsed 332429, where the same call succeeded
+        // against identical state given more gas.)
+        const gasEstimate = await publicClient.estimateContractGas({
+            ...flightGuardConfig,
+            functionName: "settle",
+            args: [BigInt(policyId), proof],
+            account: walletClient.account,
+        });
+        const gas = (gasEstimate * 15n) / 10n;
+        log(policyId, `estimated gas ${gasEstimate}, submitting with ${gas}`);
         const txHash = await walletClient.writeContract({
             ...flightGuardConfig,
             functionName: "settle",
             args: [BigInt(policyId), proof],
             chain: coston2,
             account: walletClient.account,
+            gas,
         });
         await publicClient.waitForTransactionReceipt({ hash: txHash });
         log(policyId, `settled in tx ${txHash}`);

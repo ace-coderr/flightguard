@@ -57,19 +57,14 @@ async function main() {
     // 2. Withdraw within free liquidity
     let withdrawPassed = false;
     let withdrawTxHash = "";
-    const withdrawShareAmount =
-        (BigInt(withdrawTargetAmount) * afterDeposit.totalShares) / afterDeposit.poolBalance;
+    const withdrawShareAmount = (BigInt(withdrawTargetAmount) * afterDeposit.totalShares) / afterDeposit.poolBalance;
     try {
         const balBefore = BigInt((await token.balanceOf(account)).toString());
         const withdrawTx = await flightGuard.withdraw(withdrawShareAmount.toString(), { from: account });
         withdrawTxHash = withdrawTx.tx;
         const balAfter = BigInt((await token.balanceOf(account)).toString());
         console.log("Withdraw tx:", withdrawTxHash);
-        console.log(
-            "USDT0 received:",
-            web3.utils.fromWei((balAfter - balBefore).toString(), "mwei"),
-            "USDT0\n"
-        );
+        console.log("USDT0 received:", web3.utils.fromWei((balAfter - balBefore).toString(), "mwei"), "USDT0\n");
         withdrawPassed = true;
     } catch (e: any) {
         console.log("WITHDRAW (free liquidity) FAILED:", e.message, "\n");
@@ -85,7 +80,9 @@ async function main() {
         console.log("OVER-WITHDRAW DID NOT REVERT (BUG: locked liquidity was not enforced)\n");
     } catch (e: any) {
         const reverted = /liquidity locked/i.test(e.message);
-        console.log(`Over-withdraw reverted as expected: ${reverted ? "yes (\"liquidity locked\")" : "yes (unexpected reason)"}`);
+        console.log(
+            `Over-withdraw reverted as expected: ${reverted ? 'yes ("liquidity locked")' : "yes (unexpected reason)"}`
+        );
         console.log("Revert message:", e.message, "\n");
         overWithdrawCorrectlyBlocked = reverted;
     }
