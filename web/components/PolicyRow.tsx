@@ -255,6 +255,13 @@ export function PolicyRow({ policy, rowGridClass, onSettled }: { policy: Policy;
       ...flightGuardConfig,
       functionName: "settle",
       args: [BigInt(policy.id), toSettleArgs(proof)],
+      // Explicit limit rather than a bare estimate. The FXRP-payout branch (two FtsoV2 feed
+      // reads plus an FAsset transfer) has been observed to exceed its own estimate live —
+      // gasLimit 335349 / gasUsed 332429, where the identical call succeeded against the
+      // same state given more gas. Falling short doesn't degrade: the 63/64 rule starves the
+      // inner call and the whole settlement reverts having burned the fee. ~3x the observed
+      // cost, and unused gas is refunded, so the headroom is free.
+      gas: 1_000_000n,
     });
   }
 
