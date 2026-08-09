@@ -17,9 +17,21 @@ import { getSettleStatus, startSettleJob } from "./settle";
 
 // Mirrors FlightGuard.Policy field-for-field, in declaration order:
 // holder, coverAmount, premium, premiumBps, scheduledArrival, requestHash, flightRef,
-// status, premiumInFxrp. Keep in sync with the struct - this is read positionally, so a
-// field added mid-struct silently shifts everything after it.
-type RawPolicy = readonly [string, bigint, bigint, number, number, `0x${string}`, string, number, boolean];
+// status, premiumInFxrp, payoutInFxrp, provenance. Keep in sync with the struct - this is
+// read positionally, so a field added mid-struct silently shifts everything after it.
+type RawPolicy = readonly [
+    string,
+    bigint,
+    bigint,
+    number,
+    number,
+    `0x${string}`,
+    string,
+    number,
+    boolean,
+    boolean,
+    number,
+];
 
 type DuePolicy = {
     id: number;
@@ -58,13 +70,15 @@ async function getDuePolicies(publicClient: PublicClient): Promise<DuePolicy[]> 
     );
 
     return rawPolicies
-        .map(([, , , , scheduledArrival, requestHash, flightRef, status], id): DuePolicy & { status: PolicyStatus } => ({
-            id,
-            scheduledArrival: Number(scheduledArrival),
-            requestHash,
-            flightRef,
-            status,
-        }))
+        .map(
+            ([, , , , scheduledArrival, requestHash, flightRef, status], id): DuePolicy & { status: PolicyStatus } => ({
+                id,
+                scheduledArrival: Number(scheduledArrival),
+                requestHash,
+                flightRef,
+                status,
+            })
+        )
         .filter(
             (p) =>
                 p.status === PolicyStatus.Active &&
@@ -108,8 +122,13 @@ async function settleOnePolicy(
             log(policyId, `requestHash mismatch for flightRef "${policy.flightRef}" — skipping`);
             return { policyId, outcome: "skipped", reason: "requestHash mismatch" };
         }
-        if (resolved.scheme === "legacy") {
-            log(policyId, "requestHash matches the legacy (pre-proxy) request scheme");
+        // Older schemes attest a two-field DTO; the current contract decodes a four-field
+        // FlightDto, and abi.decode reverts on those bytes. Skipping explicitly (rather than
+        // attesting and watching settle() revert) names the real reason and doesn't spend an
+        // attestation fee on a proof that could never land.
+        if (resolved.scheme !== "provenance") {
+            log(policyId, `requestHash matches the ${resolved.scheme} scheme, which this contract cannot decode`);
+            return { policyId, outcome: "skipped", reason: `unsettleable ${resolved.scheme} request scheme` };
         }
 
         log(policyId, `submitting attestation for ${flightIata} on ${date}`);

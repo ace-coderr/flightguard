@@ -1,17 +1,30 @@
 import { NextRequest, NextResponse } from "next/server";
 import { validateFlightInput } from "@/lib/server/flightRequest";
+import {
+    normalizeAirlabs,
+    resolveFlightStatus,
+    resolveFromObservations,
+    type Observation,
+} from "@/lib/server/flightSources";
 
 /**
- * Public, unauthenticated pass-through to airlabs.co/v9/flight - this is the URL
+ * Public, unauthenticated pass-through to flight-status data - this is the URL
  * scripts/fdc-attest-flight.ts / web/lib/server/flightRequest.ts attest via FDC's
  * Web2Json attestation type, so an FDC verifier node (not our own frontend) must be able
  * to reach it with no credentials. Its job is to keep FLIGHT_API_KEY out of the attested
- * request's queryParams (and therefore off-chain-visible calldata) while returning the
- * same {response: {...}}/{error: {...}} shape airlabs.co itself returns, so
- * postProcessJq (see buildPostProcessJq) doesn't need to change. Everything else in
+ * request's queryParams (and therefore off-chain-visible calldata). Everything else in
  * airlabs' payload is dropped (see stripUpstreamSecrets) - notably `.request.key.api_key`,
  * which airlabs echoes back in its own response and would otherwise leak our key to
  * anyone calling this public endpoint.
+ *
+ * The response carries two things:
+ *  - `.response` - the raw primary (airlabs) block, byte-shape unchanged. Policies bought
+ *    under the pre-provenance request scheme still settle off this, so it must stay.
+ *  - `.resolved` - the multi-source resolution the current scheme attests, including which
+ *    source answered and whether a second one corroborated it. See lib/server/flightSources.
+ *
+ * The secondary source is optional: with no AVIATIONSTACK_API_KEY set this degrades to
+ * single-source and says so honestly in `.resolved.source` / `.resolved.corroborated`.
  */
 
 const RATE_LIMIT_WINDOW_MS = 60_000;
@@ -73,12 +86,13 @@ export async function GET(req: NextRequest) {
     }
 
     let flightIata: string;
+    let date: string;
     try {
-        // date isn't sent to airlabs (its /v9/flight endpoint isn't date-scoped - the
-        // date-lock is enforced downstream by postProcessJq), but is still shape-validated
-        // here since it's part of the attested queryParams and must match what the FDC
-        // verifier fetched byte-for-byte.
-        ({ flightIata } = validateFlightInput(flightIataRaw, dateRaw));
+        // date isn't sent to airlabs (its /v9/flight endpoint isn't date-scoped), but it does
+        // select which occurrence each source's reading has to be about, and the attested jq
+        // independently re-checks it against `.resolved.date` - so the date-lock stays
+        // verifier-enforced, not merely proxy-enforced.
+        ({ flightIata, date } = validateFlightInput(flightIataRaw, dateRaw));
     } catch (err) {
         return NextResponse.json({ error: (err as Error).message }, { status: 400 });
     }
@@ -100,5 +114,26 @@ export async function GET(req: NextRequest) {
         return NextResponse.json({ error: "Unexpected upstream response shape" }, { status: 502 });
     }
 
-    return NextResponse.json(stripUpstreamSecrets(json as Record<string, unknown>), { status: upstream.status });
+    const primaryBlock = stripUpstreamSecrets(json as Record<string, unknown>);
+
+    // Resolve across sources. The primary was already fetched above (its raw block has to be
+    // passed through for the legacy request scheme), so it is handed in rather than fetched
+    // twice; only the metered secondary is called here, and only when the primary has nothing
+    // usable for this date - or when corroboration is explicitly switched on.
+    const primary: Observation | null = normalizeAirlabs(primaryBlock);
+    const fallbackKey = process.env.AVIATIONSTACK_API_KEY;
+    const corroborate = process.env.FLIGHT_CORROBORATE === "true";
+
+    const resolved = fallbackKey
+        ? await resolveFlightStatus({
+              flightIata,
+              date,
+              airlabsKey: apiKey,
+              aviationstackKey: fallbackKey,
+              corroborate,
+              knownPrimary: primary,
+          })
+        : resolveFromObservations(primary, null, date);
+
+    return NextResponse.json({ ...primaryBlock, resolved }, { status: upstream.status });
 }

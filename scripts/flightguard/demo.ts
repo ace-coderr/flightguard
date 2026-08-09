@@ -93,7 +93,7 @@ async function main() {
 
     const scheduledArrival = Math.floor(Date.now() / 1000) + scheduledArrivalDelaySec;
     const flightRef = `${flightIata}|${flightDate}`;
-    const buyTx = await flightGuard.buyCover(coverAmount, premiumBps, scheduledArrival, requestHash, flightRef, {
+    const buyTx = await flightGuard.buyCover(coverAmount, premiumBps, scheduledArrival, requestHash, flightRef, false, {
         from: account,
     });
     const coverBoughtEvent = buyTx.logs.find((e: any) => e.event === "CoverBought");

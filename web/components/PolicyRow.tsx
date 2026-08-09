@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 import { useWaitForTransactionReceipt, useWriteContract } from "wagmi";
-import { flightGuardConfig, POLICY_STATUS_LABEL, PolicyStatus } from "@/lib/contracts";
+import { flightGuardConfig, POLICY_STATUS_LABEL, PolicyStatus, PROVENANCE_LABEL, Provenance } from "@/lib/contracts";
 import { formatAmount, formatDate, parsePolicyFlightRef } from "@/lib/format";
 
 export type Policy = {
@@ -18,6 +18,8 @@ export type Policy = {
   flightRef: string;
   status: PolicyStatus;
   premiumInFxrp: boolean;
+  payoutInFxrp: boolean;
+  provenance: Provenance;
 };
 
 type SettlePhase = "submitted" | "waiting_finalization" | "fetching_proof" | "ready" | "failed";
@@ -265,7 +267,10 @@ export function PolicyRow({ policy, rowGridClass, onSettled }: { policy: Policy;
         >
           {meta ? `${meta.flightIata} · ${meta.date}` : `Policy #${policy.id}`}
         </Link>
-        <span className="font-mono">{formatAmount(policy.coverAmount)} USDT0</span>
+        <span className="font-mono">
+          {formatAmount(policy.coverAmount)} USDT0
+          {policy.payoutInFxrp && <span className="ml-1 text-xs text-muted">(pays out in FXRP)</span>}
+        </span>
         <span className="font-mono">
           {formatAmount(policy.premium)} USDT0
           <span className="ml-1 text-xs text-muted">({formatPremiumBps(policy.premiumBps)})</span>
@@ -277,6 +282,26 @@ export function PolicyRow({ policy, rowGridClass, onSettled }: { policy: Policy;
           <StatusChip status={policy.status} />
         </span>
       </div>
+
+      {/* A NoPayout that happened because no source had data is not the same event as a
+          confirmed on-time arrival, so it gets said out loud rather than left to look
+          identical. */}
+      {policy.provenance === Provenance.DataUnavailable && (
+        <div className="flex items-start gap-2 rounded-lg border border-brand/30 bg-brand/5 px-3 py-2 text-xs text-ink">
+          <span className="mt-0.5 h-1.5 w-1.5 shrink-0 rounded-full bg-brand" aria-hidden />
+          <span>
+            Settled with <strong>no flight data available</strong> — no source had a record for this flight and date,
+            so this was not a confirmed on-time arrival.{" "}
+            <Link href={`/policy/${policy.id}`} className="underline">
+              See the evidence
+            </Link>
+            .
+          </span>
+        </div>
+      )}
+      {policy.provenance === Provenance.SingleSource && (
+        <p className="text-xs text-muted">Settled on a single data source ({PROVENANCE_LABEL[policy.provenance]}).</p>
+      )}
 
       {policy.status === PolicyStatus.Active && !inProgress && (
         <div className="flex flex-wrap items-center justify-between gap-3 border-t border-ink/10 pt-4">

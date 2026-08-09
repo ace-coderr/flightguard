@@ -80,9 +80,17 @@ async function main() {
     // 4. Buy at the risk-adjusted rate.
     const requestHash = computeRequestHash(buildFlightRequestBody(flightIata, date));
     const flightRef = `${flightIata}|${date}`;
-    const buyTx = await flightGuard.buyCover(coverAmount, risk.premiumBps, scheduledArrival, requestHash, flightRef, {
-        from: account,
-    });
+    const buyTx = await flightGuard.buyCover(
+        coverAmount,
+        risk.premiumBps,
+        scheduledArrival,
+        requestHash,
+        flightRef,
+        false,
+        {
+            from: account,
+        }
+    );
     const policyId = buyTx.logs.find((e: any) => e.event === "CoverBought")!.args.policyId;
     console.log("BuyCover tx:", buyTx.tx);
     console.log("policyId:   ", policyId.toString());

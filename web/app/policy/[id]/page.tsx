@@ -4,7 +4,15 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ExplorerLink, explorerUrl } from "@/components/ExplorerLink";
 import { StatusChip } from "@/components/PolicyRow";
-import { flightGuardAddress, flightGuardConfig, POLICY_STATUS_LABEL, PolicyStatus } from "@/lib/contracts";
+import {
+  flightGuardAddress,
+  flightGuardConfig,
+  POLICY_STATUS_LABEL,
+  PolicyStatus,
+  PROVENANCE_DETAIL,
+  PROVENANCE_LABEL,
+  Provenance,
+} from "@/lib/contracts";
 import { formatAmount, formatDate, parsePolicyFlightRef } from "@/lib/format";
 import { getPublicClient } from "@/lib/server/fdc";
 import { findSettlementEvidence, type SettlementEvidence } from "@/lib/server/receipts";
@@ -14,7 +22,19 @@ import { findSettlementEvidence, type SettlementEvidence } from "@/lib/server/re
 // getLogs scan (see lib/server/receipts.ts) on every single receipt view.
 export const revalidate = 120;
 
-type RawPolicy = readonly [string, bigint, bigint, number, number, `0x${string}`, string, number, boolean];
+type RawPolicy = readonly [
+  string,
+  bigint,
+  bigint,
+  number,
+  number,
+  `0x${string}`,
+  string,
+  number,
+  boolean,
+  boolean,
+  number,
+];
 
 function formatPremiumBps(bps: number) {
   const pct = bps / 100;
@@ -29,7 +49,19 @@ const getPolicy = cache(async (id: number) => {
       functionName: "policies",
       args: [BigInt(id)],
     })) as RawPolicy;
-    const [holder, coverAmount, premium, premiumBps, scheduledArrival, requestHash, flightRef, status, premiumInFxrp] = raw;
+    const [
+      holder,
+      coverAmount,
+      premium,
+      premiumBps,
+      scheduledArrival,
+      requestHash,
+      flightRef,
+      status,
+      premiumInFxrp,
+      payoutInFxrp,
+      provenance,
+    ] = raw;
     if (holder === "0x0000000000000000000000000000000000000000") return null;
     return {
       id,
@@ -42,6 +74,8 @@ const getPolicy = cache(async (id: number) => {
       flightRef,
       status: status as PolicyStatus,
       premiumInFxrp,
+      payoutInFxrp,
+      provenance: provenance as Provenance,
     };
   } catch {
     return null;
@@ -189,8 +223,29 @@ export default async function PolicyReceiptPage({ params }: { params: { id: stri
             <span className="text-white/50">({formatPremiumBps(policy.premiumBps)})</span>
             {policy.premiumInFxrp && <span className="text-white/50"> (paid in FXRP)</span>}
           </div>
+          <div className="mt-4 text-xs text-white/50">Payout asset</div>
+          <div className="font-mono text-lg font-medium">
+            {policy.payoutInFxrp ? "FXRP" : "USDT0"}
+            {policy.payoutInFxrp && (
+              <span className="text-white/50"> (converted at the FTSO rate read at settlement)</span>
+            )}
+          </div>
           <div className="mt-4 text-xs text-white/50">Scheduled arrival</div>
           <div className="font-mono text-lg font-medium">{formatDate(policy.scheduledArrival)}</div>
+          {policy.provenance !== Provenance.Unsettled && (
+            <>
+              <div className="mt-4 text-xs text-white/50">Data provenance</div>
+              <div className="font-mono text-lg font-medium">
+                {PROVENANCE_LABEL[policy.provenance]}
+                {policy.provenance === Provenance.DataUnavailable && (
+                  <span className="ml-2 rounded-full bg-brand px-2 py-0.5 align-middle text-xs font-semibold text-white">
+                    no data
+                  </span>
+                )}
+              </div>
+              <p className="mt-1 max-w-md text-xs text-white/50">{PROVENANCE_DETAIL[policy.provenance]}</p>
+            </>
+          )}
         </div>
 
         <div className="rounded-2xl border border-ink/10 bg-white p-6 sm:p-8">

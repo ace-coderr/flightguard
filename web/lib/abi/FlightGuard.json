@@ -80,6 +80,12 @@
                 "internalType": "string",
                 "name": "flightRef",
                 "type": "string"
+            },
+            {
+                "indexed": false,
+                "internalType": "bool",
+                "name": "payoutInFxrp",
+                "type": "bool"
             }
         ],
         "name": "CoverBought",
@@ -135,6 +141,12 @@
                 "internalType": "uint256",
                 "name": "usdtUsdPriceWei",
                 "type": "uint256"
+            },
+            {
+                "indexed": false,
+                "internalType": "bool",
+                "name": "payoutInFxrp",
+                "type": "bool"
             }
         ],
         "name": "CoverBoughtWithFXRP",
@@ -170,6 +182,124 @@
         "inputs": [
             {
                 "indexed": true,
+                "internalType": "address",
+                "name": "from",
+                "type": "address"
+            },
+            {
+                "indexed": false,
+                "internalType": "uint256",
+                "name": "amount",
+                "type": "uint256"
+            },
+            {
+                "indexed": false,
+                "internalType": "uint256",
+                "name": "newReserve",
+                "type": "uint256"
+            }
+        ],
+        "name": "FxrpPayoutReserveFunded",
+        "type": "event"
+    },
+    {
+        "anonymous": false,
+        "inputs": [
+            {
+                "indexed": true,
+                "internalType": "address",
+                "name": "to",
+                "type": "address"
+            },
+            {
+                "indexed": false,
+                "internalType": "uint256",
+                "name": "amount",
+                "type": "uint256"
+            },
+            {
+                "indexed": false,
+                "internalType": "uint256",
+                "name": "newReserve",
+                "type": "uint256"
+            }
+        ],
+        "name": "FxrpPayoutReserveWithdrawn",
+        "type": "event"
+    },
+    {
+        "anonymous": false,
+        "inputs": [
+            {
+                "indexed": true,
+                "internalType": "uint256",
+                "name": "policyId",
+                "type": "uint256"
+            },
+            {
+                "indexed": false,
+                "internalType": "uint256",
+                "name": "fxrpAmountNeeded",
+                "type": "uint256"
+            },
+            {
+                "indexed": false,
+                "internalType": "uint256",
+                "name": "fxrpReserveAvailable",
+                "type": "uint256"
+            }
+        ],
+        "name": "FxrpPayoutUnavailable",
+        "type": "event"
+    },
+    {
+        "anonymous": false,
+        "inputs": [
+            {
+                "indexed": true,
+                "internalType": "uint256",
+                "name": "policyId",
+                "type": "uint256"
+            },
+            {
+                "indexed": true,
+                "internalType": "address",
+                "name": "holder",
+                "type": "address"
+            },
+            {
+                "indexed": false,
+                "internalType": "uint256",
+                "name": "coverAmountUsdt0",
+                "type": "uint256"
+            },
+            {
+                "indexed": false,
+                "internalType": "uint256",
+                "name": "fxrpAmount",
+                "type": "uint256"
+            },
+            {
+                "indexed": false,
+                "internalType": "uint256",
+                "name": "xrpUsdPriceWei",
+                "type": "uint256"
+            },
+            {
+                "indexed": false,
+                "internalType": "uint256",
+                "name": "usdtUsdPriceWei",
+                "type": "uint256"
+            }
+        ],
+        "name": "PaidOutInFxrp",
+        "type": "event"
+    },
+    {
+        "anonymous": false,
+        "inputs": [
+            {
+                "indexed": true,
                 "internalType": "uint256",
                 "name": "policyId",
                 "type": "uint256"
@@ -194,6 +324,50 @@
             }
         ],
         "name": "Settled",
+        "type": "event"
+    },
+    {
+        "anonymous": false,
+        "inputs": [
+            {
+                "indexed": true,
+                "internalType": "uint256",
+                "name": "policyId",
+                "type": "uint256"
+            },
+            {
+                "indexed": true,
+                "internalType": "enum FlightGuard.Provenance",
+                "name": "provenance",
+                "type": "uint8"
+            },
+            {
+                "indexed": false,
+                "internalType": "string",
+                "name": "source",
+                "type": "string"
+            }
+        ],
+        "name": "SettlementEvidence",
+        "type": "event"
+    },
+    {
+        "anonymous": false,
+        "inputs": [
+            {
+                "indexed": true,
+                "internalType": "address",
+                "name": "to",
+                "type": "address"
+            },
+            {
+                "indexed": false,
+                "internalType": "uint256",
+                "name": "amount",
+                "type": "uint256"
+            }
+        ],
+        "name": "SwapProceedsWithdrawn",
         "type": "event"
     },
     {
@@ -351,6 +525,11 @@
                 "internalType": "string",
                 "name": "flightRef",
                 "type": "string"
+            },
+            {
+                "internalType": "bool",
+                "name": "payoutInFxrp",
+                "type": "bool"
             }
         ],
         "name": "buyCover",
@@ -390,6 +569,11 @@
                 "internalType": "string",
                 "name": "flightRef",
                 "type": "string"
+            },
+            {
+                "internalType": "bool",
+                "name": "payoutInFxrp",
+                "type": "bool"
             }
         ],
         "name": "buyCoverWithFXRP",
@@ -469,6 +653,32 @@
         "type": "function"
     },
     {
+        "inputs": [
+            {
+                "internalType": "uint256",
+                "name": "amount",
+                "type": "uint256"
+            }
+        ],
+        "name": "fundFxrpPayoutReserve",
+        "outputs": [],
+        "stateMutability": "nonpayable",
+        "type": "function"
+    },
+    {
+        "inputs": [],
+        "name": "fxrpPayoutReserve",
+        "outputs": [
+            {
+                "internalType": "uint256",
+                "name": "",
+                "type": "uint256"
+            }
+        ],
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
         "inputs": [],
         "name": "fxrpPremiums",
         "outputs": [
@@ -492,6 +702,19 @@
             }
         ],
         "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "inputs": [
+            {
+                "internalType": "uint256",
+                "name": "amount",
+                "type": "uint256"
+            }
+        ],
+        "name": "moveFxrpPremiumsToReserve",
+        "outputs": [],
+        "stateMutability": "nonpayable",
         "type": "function"
     },
     {
@@ -561,6 +784,16 @@
                 "internalType": "bool",
                 "name": "premiumInFxrp",
                 "type": "bool"
+            },
+            {
+                "internalType": "bool",
+                "name": "payoutInFxrp",
+                "type": "bool"
+            },
+            {
+                "internalType": "enum FlightGuard.Provenance",
+                "name": "provenance",
+                "type": "uint8"
             }
         ],
         "stateMutability": "view",
@@ -590,6 +823,35 @@
             }
         ],
         "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "inputs": [
+            {
+                "internalType": "uint256",
+                "name": "usdt0Amount",
+                "type": "uint256"
+            }
+        ],
+        "name": "previewFxrpPayout",
+        "outputs": [
+            {
+                "internalType": "uint256",
+                "name": "fxrpAmount",
+                "type": "uint256"
+            },
+            {
+                "internalType": "uint256",
+                "name": "xrpUsdPriceWei",
+                "type": "uint256"
+            },
+            {
+                "internalType": "uint256",
+                "name": "usdtUsdPriceWei",
+                "type": "uint256"
+            }
+        ],
+        "stateMutability": "nonpayable",
         "type": "function"
     },
     {
@@ -846,6 +1108,19 @@
         "type": "function"
     },
     {
+        "inputs": [],
+        "name": "usdt0SwapProceeds",
+        "outputs": [
+            {
+                "internalType": "uint256",
+                "name": "",
+                "type": "uint256"
+            }
+        ],
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
         "inputs": [
             {
                 "internalType": "uint256",
@@ -871,7 +1146,43 @@
                 "type": "uint256"
             }
         ],
+        "name": "withdrawFxrpPayoutReserve",
+        "outputs": [],
+        "stateMutability": "nonpayable",
+        "type": "function"
+    },
+    {
+        "inputs": [
+            {
+                "internalType": "address",
+                "name": "to",
+                "type": "address"
+            },
+            {
+                "internalType": "uint256",
+                "name": "amount",
+                "type": "uint256"
+            }
+        ],
         "name": "withdrawFxrpPremiums",
+        "outputs": [],
+        "stateMutability": "nonpayable",
+        "type": "function"
+    },
+    {
+        "inputs": [
+            {
+                "internalType": "address",
+                "name": "to",
+                "type": "address"
+            },
+            {
+                "internalType": "uint256",
+                "name": "amount",
+                "type": "uint256"
+            }
+        ],
+        "name": "withdrawSwapProceeds",
         "outputs": [],
         "stateMutability": "nonpayable",
         "type": "function"

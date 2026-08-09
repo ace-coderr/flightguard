@@ -116,6 +116,7 @@ async function main() {
         scheduledArrival,
         requestHash,
         flightRef,
+        false, // payoutInFxrp - this script exercises the premium leg only; see fxrpPayoutE2E.ts for the payout leg
         {
             from: account,
         }

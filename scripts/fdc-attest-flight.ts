@@ -35,7 +35,13 @@ const headers = `{"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}`;
 const queryParams = "{}";
 const body = "{}";
 
-const abiSignature = `{"components":[{"internalType":"string","name":"flightStatus","type":"string"},{"internalType":"uint256","name":"delayMinutes","type":"uint256"}],"name":"dto","type":"tuple"}`;
+// Four-field DTO: the flight reading plus which source produced it and whether a second
+// source corroborated it. MUST stay byte-for-byte identical to
+// web/lib/server/flightRequest.ts's abiSignature.
+const abiSignature = `{"components":[{"internalType":"string","name":"flightStatus","type":"string"},{"internalType":"uint256","name":"delayMinutes","type":"uint256"},{"internalType":"string","name":"source","type":"string"},{"internalType":"bool","name":"corroborated","type":"bool"}],"name":"dto","type":"tuple"}`;
+
+// Pre-provenance two-field DTO, kept so old policies are still recognisable.
+const legacyAbiSignature = `{"components":[{"internalType":"string","name":"flightStatus","type":"string"},{"internalType":"uint256","name":"delayMinutes","type":"uint256"}],"name":"dto","type":"tuple"}`;
 
 // Configuration constants
 const attestationTypeBase = "Web2Json";
@@ -57,7 +63,22 @@ const verifierUrlBase = VERIFIER_URL_TESTNET;
 // `EXPR as $match | ...`: the FDC Web2Json verifier's jq engine rejects `as $var` variable
 // bindings outright (confirmed live against the testnet verifier - it returns "INVALID:
 // INVALID JQ FILTER" for that syntax specifically, independent of the rest of the filter).
+// The lock is on `.resolved.date` - the departure date of the occurrence the proxy resolved
+// across its sources - so the verifier itself refuses a reading about another day's
+// occurrence. Every field carries a `//` default, so a proxy returning no `.resolved` block
+// degrades to ("EMPTY", 0, "none", false), never to a payout.
+// MUST stay byte-for-byte identical to web/lib/server/flightRequest.ts's buildPostProcessJq.
 function buildPostProcessJq(date: string) {
+    const matched = `(.resolved.date // "") == "${date}"`;
+    return (
+        `{flightStatus: (if ${matched} then (.resolved.flightStatus // "EMPTY") else "EMPTY" end), ` +
+        `delayMinutes: (if ${matched} then (.resolved.delayMinutes // 0) else 0 end), ` +
+        `source: (if ${matched} then (.resolved.source // "none") else "none" end), ` +
+        `corroborated: (if ${matched} then (.resolved.corroborated // false) else false end)}`
+    );
+}
+
+function buildLegacyPostProcessJq(date: string) {
     const matched = `(.response.dep_time_utc // "" | startswith("${date}"))`;
     return `{flightStatus: (if ${matched} then (.response.status // .error.message // "EMPTY") else "EMPTY" end), delayMinutes: (if ${matched} then (.response.arr_delayed // 0) else 0 end)}`;
 }
@@ -96,8 +117,8 @@ export function buildLegacyFlightRequestBody(flightIataCode: string, date: strin
         headers,
         queryParams: JSON.stringify({ api_key: apiKey, flight_iata: flightIataCode }),
         body,
-        postProcessJq: buildPostProcessJq(date),
-        abiSignature,
+        postProcessJq: buildLegacyPostProcessJq(date),
+        abiSignature: legacyAbiSignature,
     };
 }
 

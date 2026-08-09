@@ -10,6 +10,7 @@ import { formatAmount, formatDate, formatUtcTime } from "@/lib/format";
 import { ExplorerLink } from "@/components/ExplorerLink";
 
 type PayWith = "USDT0" | "FXRP";
+type PayoutIn = "USDT0" | "FXRP";
 
 type CoverableFlight = {
   flightIata: string;
@@ -77,6 +78,7 @@ function CoverForm() {
   const [quoteError, setQuoteError] = useState<string | null>(null);
   const [isQuoting, setIsQuoting] = useState(false);
   const [payWith, setPayWith] = useState<PayWith>("USDT0");
+  const [payoutIn, setPayoutIn] = useState<PayoutIn>("USDT0");
   const [coverableFlights, setCoverableFlights] = useState<CoverableFlight[]>([]);
   const [coverableLoading, setCoverableLoading] = useState(true);
 
@@ -123,6 +125,34 @@ function CoverForm() {
   // allowance". Approving a small headroom above the quote absorbs that drift - only the
   // amount the contract actually charges is ever transferred.
   const fxrpApprovalAmount = fxrpAmount === undefined ? undefined : (fxrpAmount * 102n) / 100n;
+
+  // Estimated FXRP payout for the cover amount. Deliberately labelled as an estimate in the
+  // UI: settle() re-reads XRP/USD inside the settlement transaction, so what actually lands
+  // in the wallet is priced whenever the flight settles, not now.
+  const { data: fxrpPayoutPreview } = useReadContract({
+    ...flightGuardConfig,
+    functionName: "previewFxrpPayout",
+    args: quote ? [quote.coverAmount] : undefined,
+    query: { enabled: Boolean(quote) && payoutIn === "FXRP", refetchInterval: 15_000 },
+  });
+  const [payoutFxrpAmount, payoutXrpPriceWei, payoutUsdtPriceWei] = (fxrpPayoutPreview as
+    | readonly [bigint, bigint, bigint]
+    | undefined) ?? [undefined, undefined, undefined];
+
+  // An FXRP payout is funded from a pre-funded FXRP reserve, not from the USDT0 pool. If the
+  // reserve is short at settlement the contract pays USDT0 instead of failing, so this is a
+  // heads-up rather than a blocker.
+  const { data: fxrpPayoutReserveData } = useReadContract({
+    ...flightGuardConfig,
+    functionName: "fxrpPayoutReserve",
+    query: { enabled: payoutIn === "FXRP", refetchInterval: 15_000 },
+  });
+  const fxrpPayoutReserve = fxrpPayoutReserveData as bigint | undefined;
+  const reserveMayBeShort =
+    payoutIn === "FXRP" &&
+    payoutFxrpAmount !== undefined &&
+    fxrpPayoutReserve !== undefined &&
+    fxrpPayoutReserve < payoutFxrpAmount;
 
   const {
     writeContract: writeApprove,
@@ -287,18 +317,21 @@ function CoverForm() {
 
   function handleBuyCover() {
     if (!quote) return;
-    if (payWith === "FXRP") {
-      writeBuyCover({
-        ...flightGuardConfig,
-        functionName: "buyCoverWithFXRP",
-        args: [quote.coverAmount, quote.premiumBps, quote.scheduledArrival, quote.requestHash, quote.flightRef],
-      });
-      return;
-    }
+    // Payment asset and payout asset are independent choices - all four combinations are
+    // valid, so payoutInFxrp is passed the same way on both entry points.
+    const payoutInFxrp = payoutIn === "FXRP";
+    const args = [
+      quote.coverAmount,
+      quote.premiumBps,
+      quote.scheduledArrival,
+      quote.requestHash,
+      quote.flightRef,
+      payoutInFxrp,
+    ] as const;
     writeBuyCover({
       ...flightGuardConfig,
-      functionName: "buyCover",
-      args: [quote.coverAmount, quote.premiumBps, quote.scheduledArrival, quote.requestHash, quote.flightRef],
+      functionName: payWith === "FXRP" ? "buyCoverWithFXRP" : "buyCover",
+      args,
     });
   }
 
@@ -433,6 +466,11 @@ function CoverForm() {
                 </li>
                 <li className="flex items-start gap-3">
                   <span className="mt-0.5 h-1.5 w-1.5 shrink-0 rounded-full bg-brand" />
+                  Pay the premium in USDT0 or FXRP, and choose to be paid out in either too — the FXRP legs are both
+                  priced live by FTSO.
+                </li>
+                <li className="flex items-start gap-3">
+                  <span className="mt-0.5 h-1.5 w-1.5 shrink-0 rounded-full bg-brand" />
                   Anyone can trigger settlement after scheduled arrival with a valid FDC proof.
                 </li>
               </ul>
@@ -459,6 +497,13 @@ function CoverForm() {
               <dl className="grid grid-cols-2 gap-y-2 border-t border-white/10 pt-4 text-sm">
                 <dt className="text-white/50">Cover amount</dt>
                 <dd className="text-right font-mono">{formatAmount(quote.coverAmount)} USDT0</dd>
+                <dt className="text-white/50">Payout asset</dt>
+                <dd className="text-right font-mono">
+                  {payoutIn}
+                  {payoutIn === "FXRP" && (
+                    <span className="ml-1 text-xs text-white/50">at the FTSO rate on settlement</span>
+                  )}
+                </dd>
                 <dt className="text-white/50">Scheduled arrival by</dt>
                 <dd className="text-right font-mono">{formatDate(quote.scheduledArrival)}</dd>
               </dl>
@@ -573,9 +618,66 @@ function CoverForm() {
                 </p>
               </div>
 
+              <div className="border-t border-white/10 pt-5">
+                <div className="mb-2 flex items-center justify-between">
+                  <span className="text-xs text-white/50">Receive payout in</span>
+                  <div className="flex gap-1 rounded-full bg-white/10 p-1 font-mono text-xs">
+                    {(["USDT0", "FXRP"] as const).map((option) => (
+                      <button
+                        key={option}
+                        type="button"
+                        onClick={() => setPayoutIn(option)}
+                        className={`rounded-full px-3 py-1 transition-colors ${
+                          payoutIn === option ? "bg-brand text-white" : "text-white/60 hover:text-white"
+                        }`}
+                      >
+                        {option}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {payoutIn === "USDT0" ? (
+                  <p className="text-xs text-white/50">
+                    A delay or cancellation pays {formatAmount(quote.coverAmount)} USDT0 straight from the pool.
+                  </p>
+                ) : (
+                  <>
+                    <div className="font-mono text-lg text-white">
+                      ≈ {payoutFxrpAmount !== undefined ? Number(formatUnits(payoutFxrpAmount, 6)).toFixed(4) : "..."}{" "}
+                      <span className="text-sm text-white/50">FXRP</span>
+                      <span className="ml-1 text-sm text-white/50">
+                        for {formatAmount(quote.coverAmount)} USDT0 of cover
+                      </span>
+                    </div>
+                    {payoutXrpPriceWei !== undefined && payoutUsdtPriceWei !== undefined && (
+                      <div className="mt-1 font-mono text-xs text-white/50">
+                        @ FTSO rate right now (XRP/USD ${Number(formatUnits(payoutXrpPriceWei, 18)).toFixed(4)}, USDT/USD
+                        ${Number(formatUnits(payoutUsdtPriceWei, 18)).toFixed(4)})
+                      </div>
+                    )}
+                    <p className="mt-1 text-xs text-white/40">
+                      Estimate only. Your cover stays {formatAmount(quote.coverAmount)} USDT0 of value — the contract
+                      converts it to FXRP at the FTSO rate read inside the settlement transaction itself, so the exact
+                      FXRP you receive is priced when the flight settles, not now.
+                    </p>
+                    {reserveMayBeShort && (
+                      <p className="mt-2 text-xs text-brand">
+                        FXRP payout reserve currently holds{" "}
+                        {fxrpPayoutReserve !== undefined ? Number(formatUnits(fxrpPayoutReserve, 6)).toFixed(4) : "…"}{" "}
+                        FXRP — less than this payout needs. If it is still short at settlement, the contract pays you in
+                        USDT0 instead. Your claim is never at risk either way.
+                      </p>
+                    )}
+                  </>
+                )}
+              </div>
+
               <dl className="grid grid-cols-2 gap-y-2 border-t border-white/10 pt-4 text-sm">
                 <dt className="text-white/50">Cover amount</dt>
                 <dd className="text-right font-mono">{formatAmount(quote.coverAmount)} USDT0</dd>
+                <dt className="text-white/50">Payout asset</dt>
+                <dd className="text-right font-mono">{payoutIn}</dd>
                 <dt className="text-white/50">Scheduled arrival by</dt>
                 <dd className="text-right font-mono">{formatDate(quote.scheduledArrival)}</dd>
               </dl>

@@ -2,17 +2,30 @@ import { expect } from "chai";
 import { ethers } from "hardhat";
 import { loadFixture, time } from "@nomicfoundation/hardhat-network-helpers";
 
-// Generic (non-secret) stand-in for the real airlabs.co request built by
+// Generic (non-secret) stand-in for the real request built by
 // scripts/fdc-attest-flight.ts's buildFlightRequestBody - same shape, no API key.
-// postProcessJq matches buildPostProcessJq's date-lock (keyed on dep_time_utc, matching
-// FLIGHT_REF's "2026-07-10" below) byte-for-byte.
+// postProcessJq mirrors buildPostProcessJq's date-lock (keyed on the proxy's resolved
+// departure date, matching FLIGHT_REF's "2026-07-10" below).
+const DTO_TUPLE = "tuple(string flightStatus, uint256 delayMinutes, string source, bool corroborated)";
+const DATE_LOCK = `(.resolved.date // "") == "2026-07-10"`;
 const REQUEST = {
     url: "https://airlabs.co/api/v9/flight",
     headers: "{}",
     queryParams: JSON.stringify({ flight_iata: "BA75" }),
-    postProcessJq: `{flightStatus: (if (.response.dep_time_utc // "" | startswith("2026-07-10")) then (.response.status // .error.message // "EMPTY") else "EMPTY" end), delayMinutes: (if (.response.dep_time_utc // "" | startswith("2026-07-10")) then (.response.arr_delayed // 0) else 0 end)}`,
-    abiSignature: `{"components":[{"internalType":"string","name":"flightStatus","type":"string"},{"internalType":"uint256","name":"delayMinutes","type":"uint256"}],"name":"dto","type":"tuple"}`,
+    postProcessJq:
+        `{flightStatus: (if ${DATE_LOCK} then (.resolved.flightStatus // "EMPTY") else "EMPTY" end), ` +
+        `delayMinutes: (if ${DATE_LOCK} then (.resolved.delayMinutes // 0) else 0 end), ` +
+        `source: (if ${DATE_LOCK} then (.resolved.source // "none") else "none" end), ` +
+        `corroborated: (if ${DATE_LOCK} then (.resolved.corroborated // false) else false end)}`,
+    abiSignature: `{"components":[{"internalType":"string","name":"flightStatus","type":"string"},{"internalType":"uint256","name":"delayMinutes","type":"uint256"},{"internalType":"string","name":"source","type":"string"},{"internalType":"bool","name":"corroborated","type":"bool"}],"name":"dto","type":"tuple"}`,
 };
+
+enum Provenance {
+    Unsettled = 0,
+    Corroborated = 1,
+    SingleSource = 2,
+    DataUnavailable = 3,
+}
 
 // Mirrors FlightGuard.sol's requestHash formula exactly (and scripts/fdc-attest-flight.ts's
 // computeRequestHash): keccak256(abi.encode(url, headers, queryParams, postProcessJq, abiSignature)).
@@ -26,11 +39,11 @@ function computeRequestHash(req: typeof REQUEST = REQUEST) {
 }
 
 // abiSignature declares a single "dto" tuple, so this must encode as ONE wrapped tuple
-// value (matching FlightDto), not two flat params.
-function encodeDto(flightStatus: string, delayMinutes: number | bigint) {
+// value (matching FlightDto), not four flat params.
+function encodeDto(flightStatus: string, delayMinutes: number | bigint, source = "airlabs", corroborated = false) {
     return ethers.AbiCoder.defaultAbiCoder().encode(
-        ["tuple(string flightStatus, uint256 delayMinutes)"],
-        [{ flightStatus, delayMinutes }]
+        [DTO_TUPLE],
+        [{ flightStatus, delayMinutes, source, corroborated }]
     );
 }
 
@@ -38,13 +51,21 @@ function buildProof(
     overrides: {
         flightStatus?: string;
         delayMinutes?: number | bigint;
+        source?: string;
+        corroborated?: boolean;
         req?: typeof REQUEST;
         abiEncodedData?: string;
     } = {}
 ) {
     const req = overrides.req ?? REQUEST;
     const abiEncodedData =
-        overrides.abiEncodedData ?? encodeDto(overrides.flightStatus ?? "scheduled", overrides.delayMinutes ?? 0);
+        overrides.abiEncodedData ??
+        encodeDto(
+            overrides.flightStatus ?? "scheduled",
+            overrides.delayMinutes ?? 0,
+            overrides.source ?? "airlabs",
+            overrides.corroborated ?? false
+        );
     return {
         merkleProof: [] as string[],
         data: {
@@ -103,7 +124,8 @@ async function deployFixture() {
 
     const mintAmount = ethers.parseUnits("10000", 6);
     const fxrpMintAmount = ethers.parseUnits("1000", 6);
-    for (const s of [backer, backer2, traveler, other]) {
+    // owner included: it's the account that funds the FXRP payout reserve.
+    for (const s of [owner, backer, backer2, traveler, other]) {
         await token.mint(s.address, mintAmount);
         await token.connect(s).approve(await flightGuard.getAddress(), ethers.MaxUint256);
         await fxrp.mint(s.address, fxrpMintAmount);
@@ -122,19 +144,24 @@ async function buyActivePolicy(
     traveler: any,
     coverAmount = ethers.parseUnits("40", 6),
     req: typeof REQUEST = REQUEST,
-    flightRef: string = FLIGHT_REF
+    flightRef: string = FLIGHT_REF,
+    payoutInFxrp = false
 ) {
     const scheduledArrival = (await time.latest()) + 3600;
     const requestHash = computeRequestHash(req);
-    await flightGuard.connect(traveler).buyCover(
-        coverAmount,
-        FALLBACK_PREMIUM_BPS,
-        scheduledArrival,
-        requestHash,
-        flightRef
-    );
+    await flightGuard
+        .connect(traveler)
+        .buyCover(coverAmount, FALLBACK_PREMIUM_BPS, scheduledArrival, requestHash, flightRef, payoutInFxrp);
     const policyId = (await flightGuard.policyCount()) - 1n;
     return { policyId, scheduledArrival, requestHash, coverAmount, flightRef };
+}
+
+// FXRP the contract will hand over for `usdt0Amount` of cover at the given (mock) FTSO
+// rates. Deliberately written out here rather than read back from the contract, so the
+// expected payout is independently derived: USDT0 value -> USD via USDT/USD -> XRP via
+// XRP/USD. FXRP and USDT0 both have 6 decimals, so the scale factors cancel.
+function expectedFxrpFor(usdt0Amount: bigint, xrpPriceWei = XRP_USD_PRICE_WEI, usdtPriceWei = USDT_USD_PRICE_WEI) {
+    return (usdt0Amount * usdtPriceWei) / xrpPriceWei;
 }
 
 describe("FlightGuard", () => {
@@ -219,10 +246,12 @@ describe("FlightGuard", () => {
             const requestHash = computeRequestHash();
 
             await expect(
-                flightGuard.connect(traveler).buyCover(coverAmount, premiumBps, scheduledArrival, requestHash, FLIGHT_REF)
+                flightGuard
+                    .connect(traveler)
+                    .buyCover(coverAmount, premiumBps, scheduledArrival, requestHash, FLIGHT_REF, false)
             )
                 .to.emit(flightGuard, "CoverBought")
-                .withArgs(0n, traveler.address, coverAmount, premium, premiumBps, requestHash, FLIGHT_REF);
+                .withArgs(0n, traveler.address, coverAmount, premium, premiumBps, requestHash, FLIGHT_REF, false);
 
             expect(await flightGuard.totalLocked()).to.equal(coverAmount);
             const policy = await flightGuard.policies(0n);
@@ -232,6 +261,7 @@ describe("FlightGuard", () => {
             expect(policy.premiumBps).to.equal(premiumBps);
             expect(policy.flightRef).to.equal(FLIGHT_REF);
             expect(policy.status).to.equal(0n); // Active
+            expect(policy.payoutInFxrp).to.equal(false); // default: pay out in USDT0
         });
 
         it("stores flightRef in the policy and emits it in CoverBought", async () => {
@@ -245,10 +275,12 @@ describe("FlightGuard", () => {
             const flightRef = "KL1631|2026-08-01";
 
             await expect(
-                flightGuard.connect(traveler).buyCover(coverAmount, premiumBps, scheduledArrival, requestHash, flightRef)
+                flightGuard
+                    .connect(traveler)
+                    .buyCover(coverAmount, premiumBps, scheduledArrival, requestHash, flightRef, false)
             )
                 .to.emit(flightGuard, "CoverBought")
-                .withArgs(0n, traveler.address, coverAmount, premium, premiumBps, requestHash, flightRef);
+                .withArgs(0n, traveler.address, coverAmount, premium, premiumBps, requestHash, flightRef, false);
 
             const policy = await flightGuard.policies(0n);
             expect(policy.flightRef).to.equal(flightRef);
@@ -262,7 +294,7 @@ describe("FlightGuard", () => {
             await expect(
                 flightGuard
                     .connect(traveler)
-                    .buyCover(0, FALLBACK_PREMIUM_BPS, scheduledArrival, computeRequestHash(), FLIGHT_REF)
+                    .buyCover(0, FALLBACK_PREMIUM_BPS, scheduledArrival, computeRequestHash(), FLIGHT_REF, false)
             ).to.be.revertedWith("cover out of range");
         });
 
@@ -274,7 +306,14 @@ describe("FlightGuard", () => {
             await expect(
                 flightGuard
                     .connect(traveler)
-                    .buyCover(maxCover + 1n, FALLBACK_PREMIUM_BPS, scheduledArrival, computeRequestHash(), FLIGHT_REF)
+                    .buyCover(
+                        maxCover + 1n,
+                        FALLBACK_PREMIUM_BPS,
+                        scheduledArrival,
+                        computeRequestHash(),
+                        FLIGHT_REF,
+                        false
+                    )
             ).to.be.revertedWith("cover out of range");
         });
 
@@ -290,7 +329,8 @@ describe("FlightGuard", () => {
                         FALLBACK_PREMIUM_BPS,
                         pastArrival,
                         computeRequestHash(),
-                        FLIGHT_REF
+                        FLIGHT_REF,
+                        false
                     )
             ).to.be.revertedWith("flight in past");
         });
@@ -307,7 +347,8 @@ describe("FlightGuard", () => {
                         FALLBACK_PREMIUM_BPS,
                         scheduledArrival,
                         computeRequestHash(),
-                        FLIGHT_REF
+                        FLIGHT_REF,
+                        false
                     )
             ).to.be.revertedWith("insufficient pool");
         });
@@ -326,7 +367,8 @@ describe("FlightGuard", () => {
                         Number(minPremiumBps) - 1,
                         scheduledArrival,
                         computeRequestHash(),
-                        FLIGHT_REF
+                        FLIGHT_REF,
+                        false
                     )
             ).to.be.revertedWith("premium out of range");
         });
@@ -345,7 +387,8 @@ describe("FlightGuard", () => {
                         Number(maxPremiumBps) + 1,
                         scheduledArrival,
                         computeRequestHash(),
-                        FLIGHT_REF
+                        FLIGHT_REF,
+                        false
                     )
             ).to.be.revertedWith("premium out of range");
         });
@@ -360,7 +403,7 @@ describe("FlightGuard", () => {
 
             await flightGuard
                 .connect(traveler)
-                .buyCover(coverAmount, fallbackPremiumBps, scheduledArrival, computeRequestHash(), FLIGHT_REF);
+                .buyCover(coverAmount, fallbackPremiumBps, scheduledArrival, computeRequestHash(), FLIGHT_REF, false);
 
             const policy = await flightGuard.policies(0n);
             expect(policy.premium).to.equal(expectedPremium);
@@ -399,7 +442,7 @@ describe("FlightGuard", () => {
             await expect(
                 flightGuard
                     .connect(traveler)
-                    .buyCoverWithFXRP(coverAmount, premiumBps, scheduledArrival, requestHash, FLIGHT_REF)
+                    .buyCoverWithFXRP(coverAmount, premiumBps, scheduledArrival, requestHash, FLIGHT_REF, false)
             )
                 .to.emit(flightGuard, "CoverBoughtWithFXRP")
                 .withArgs(
@@ -410,7 +453,8 @@ describe("FlightGuard", () => {
                     premiumBps,
                     expectedFxrp,
                     XRP_USD_PRICE_WEI,
-                    USDT_USD_PRICE_WEI
+                    USDT_USD_PRICE_WEI,
+                    false
                 );
 
             expect(await fxrp.balanceOf(traveler.address)).to.equal(travelerFxrpBefore - expectedFxrp);
@@ -428,6 +472,9 @@ describe("FlightGuard", () => {
             expect(policy.premiumBps).to.equal(premiumBps);
             expect(policy.status).to.equal(0n); // Active
             expect(policy.premiumInFxrp).to.equal(true);
+            // Paying in FXRP does not imply being paid out in FXRP - the two directions are
+            // independent choices.
+            expect(policy.payoutInFxrp).to.equal(false);
         });
 
         it("previewFxrpPremium quotes the same amount buyCoverWithFXRP charges", async () => {
@@ -463,7 +510,8 @@ describe("FlightGuard", () => {
                         FALLBACK_PREMIUM_BPS,
                         scheduledArrival,
                         computeRequestHash(),
-                        FLIGHT_REF
+                        FLIGHT_REF,
+                        false
                     )
             )
                 .to.emit(flightGuard, "CoverBoughtWithFXRP")
@@ -475,7 +523,8 @@ describe("FlightGuard", () => {
                     FALLBACK_PREMIUM_BPS,
                     expectedFxrp,
                     doubledXrpPrice,
-                    USDT_USD_PRICE_WEI
+                    USDT_USD_PRICE_WEI,
+                    false
                 );
 
             // Doubling XRP's price should have halved the FXRP the premium costs.
@@ -491,7 +540,14 @@ describe("FlightGuard", () => {
             await expect(
                 flightGuard
                     .connect(traveler)
-                    .buyCoverWithFXRP(0, FALLBACK_PREMIUM_BPS, scheduledArrival, computeRequestHash(), FLIGHT_REF)
+                    .buyCoverWithFXRP(
+                        0,
+                        FALLBACK_PREMIUM_BPS,
+                        scheduledArrival,
+                        computeRequestHash(),
+                        FLIGHT_REF,
+                        false
+                    )
             ).to.be.revertedWith("cover out of range");
 
             const pastArrival = (await time.latest()) - 10;
@@ -503,7 +559,8 @@ describe("FlightGuard", () => {
                         FALLBACK_PREMIUM_BPS,
                         pastArrival,
                         computeRequestHash(),
-                        FLIGHT_REF
+                        FLIGHT_REF,
+                        false
                     )
             ).to.be.revertedWith("flight in past");
 
@@ -525,7 +582,8 @@ describe("FlightGuard", () => {
                         Number(minPremiumBps) - 1,
                         scheduledArrival,
                         computeRequestHash(),
-                        FLIGHT_REF
+                        FLIGHT_REF,
+                        false
                     )
             ).to.be.revertedWith("premium out of range");
 
@@ -537,7 +595,8 @@ describe("FlightGuard", () => {
                         Number(maxPremiumBps) + 1,
                         scheduledArrival,
                         computeRequestHash(),
-                        FLIGHT_REF
+                        FLIGHT_REF,
+                        false
                     )
             ).to.be.revertedWith("premium out of range");
         });
@@ -557,7 +616,8 @@ describe("FlightGuard", () => {
                         FALLBACK_PREMIUM_BPS,
                         scheduledArrival,
                         computeRequestHash(),
-                        FLIGHT_REF
+                        FLIGHT_REF,
+                        false
                     )
             ).to.be.revertedWith("bad FTSO price");
         });
@@ -571,7 +631,7 @@ describe("FlightGuard", () => {
             const requestHash = computeRequestHash();
             await flightGuard
                 .connect(traveler)
-                .buyCoverWithFXRP(coverAmount, FALLBACK_PREMIUM_BPS, scheduledArrival, requestHash, FLIGHT_REF);
+                .buyCoverWithFXRP(coverAmount, FALLBACK_PREMIUM_BPS, scheduledArrival, requestHash, FLIGHT_REF, false);
 
             await time.increaseTo(scheduledArrival);
             const holderBalanceBefore = await token.balanceOf(traveler.address);
@@ -602,12 +662,12 @@ describe("FlightGuard", () => {
 
             await flightGuard
                 .connect(traveler)
-                .buyCover(coverAmount, FALLBACK_PREMIUM_BPS, scheduledArrival, requestHash, FLIGHT_REF);
+                .buyCover(coverAmount, FALLBACK_PREMIUM_BPS, scheduledArrival, requestHash, FLIGHT_REF, false);
             const usdt0PolicyId = (await flightGuard.policyCount()) - 1n;
 
             await flightGuard
                 .connect(traveler)
-                .buyCoverWithFXRP(coverAmount, FALLBACK_PREMIUM_BPS, scheduledArrival, requestHash, FLIGHT_REF);
+                .buyCoverWithFXRP(coverAmount, FALLBACK_PREMIUM_BPS, scheduledArrival, requestHash, FLIGHT_REF, false);
             const fxrpPolicyId = (await flightGuard.policyCount()) - 1n;
 
             expect((await flightGuard.policies(usdt0PolicyId)).requestHash).to.equal(
@@ -617,15 +677,356 @@ describe("FlightGuard", () => {
             await time.increaseTo(scheduledArrival);
             const proof = buildProof({ flightStatus: "cancelled", delayMinutes: 0 });
 
-            await expect(flightGuard.settle(usdt0PolicyId, proof)).to.changeTokenBalance(
-                token,
-                traveler,
-                coverAmount
-            );
+            await expect(flightGuard.settle(usdt0PolicyId, proof)).to.changeTokenBalance(token, traveler, coverAmount);
             await expect(flightGuard.settle(fxrpPolicyId, proof)).to.changeTokenBalance(token, traveler, coverAmount);
 
             expect((await flightGuard.policies(usdt0PolicyId)).status).to.equal(1n); // PaidOut
             expect((await flightGuard.policies(fxrpPolicyId)).status).to.equal(1n); // PaidOut
+        });
+    });
+
+    describe("FXRP payout (payoutInFxrp)", () => {
+        const COVER = ethers.parseUnits("40", 6);
+        const RESERVE = ethers.parseUnits("500", 6);
+
+        // Pool + funded FXRP payout reserve, ready for a policy to be bought and settled.
+        async function fundedFixture() {
+            const f = await loadFixture(deployFixture);
+            await f.flightGuard.connect(f.backer).deposit(ethers.parseUnits("100", 6));
+            await f.flightGuard.connect(f.owner).fundFxrpPayoutReserve(RESERVE);
+            return f;
+        }
+
+        async function buyFxrpPayoutPolicy(f: any, coverAmount = COVER) {
+            const scheduledArrival = (await time.latest()) + 3600;
+            await f.flightGuard
+                .connect(f.traveler)
+                .buyCover(coverAmount, FALLBACK_PREMIUM_BPS, scheduledArrival, computeRequestHash(), FLIGHT_REF, true);
+            return { policyId: (await f.flightGuard.policyCount()) - 1n, scheduledArrival, coverAmount };
+        }
+
+        const payoutProof = () => buildProof({ flightStatus: "cancelled", delayMinutes: 0 });
+
+        it("records the payout choice on the policy and in CoverBought", async () => {
+            const f = await fundedFixture();
+            const scheduledArrival = (await time.latest()) + 3600;
+            const requestHash = computeRequestHash();
+
+            await expect(
+                f.flightGuard
+                    .connect(f.traveler)
+                    .buyCover(COVER, FALLBACK_PREMIUM_BPS, scheduledArrival, requestHash, FLIGHT_REF, true)
+            )
+                .to.emit(f.flightGuard, "CoverBought")
+                .withArgs(
+                    0n,
+                    f.traveler.address,
+                    COVER,
+                    (COVER * FALLBACK_PREMIUM_BPS) / 10_000n,
+                    FALLBACK_PREMIUM_BPS,
+                    requestHash,
+                    FLIGHT_REF,
+                    true
+                );
+
+            expect((await f.flightGuard.policies(0n)).payoutInFxrp).to.equal(true);
+        });
+
+        it("pays the FTSO-converted FXRP amount and no USDT0", async () => {
+            const f = await fundedFixture();
+            const { policyId, scheduledArrival } = await buyFxrpPayoutPolicy(f);
+            await time.increaseTo(scheduledArrival);
+
+            const expectedFxrp = expectedFxrpFor(COVER);
+            const fxrpBefore = await f.fxrp.balanceOf(f.traveler.address);
+            const usdt0Before = await f.token.balanceOf(f.traveler.address);
+
+            await expect(f.flightGuard.settle(policyId, payoutProof()))
+                .to.emit(f.flightGuard, "PaidOutInFxrp")
+                .withArgs(policyId, f.traveler.address, COVER, expectedFxrp, XRP_USD_PRICE_WEI, USDT_USD_PRICE_WEI);
+
+            expect(await f.fxrp.balanceOf(f.traveler.address)).to.equal(fxrpBefore + expectedFxrp);
+            expect(await f.token.balanceOf(f.traveler.address)).to.equal(usdt0Before); // not a cent of USDT0
+            expect((await f.flightGuard.policies(policyId)).status).to.equal(1n); // PaidOut
+            expect(await f.flightGuard.fxrpPayoutReserve()).to.equal(RESERVE - expectedFxrp);
+            expect(await f.flightGuard.usdt0SwapProceeds()).to.equal(COVER);
+        });
+
+        // The whole point of doing the conversion inside settle(): the rate is the one live
+        // at payout, so an XRP move between purchase and settlement changes what lands in the
+        // wallet. Purchase-time pricing would have paid the pre-move amount.
+        it("converts at the settlement-time rate, not the purchase-time rate", async () => {
+            const f = await fundedFixture();
+            const { policyId, scheduledArrival } = await buyFxrpPayoutPolicy(f);
+
+            const purchaseTimeFxrp = expectedFxrpFor(COVER); // what XRP $1.10 would have paid
+
+            // XRP halves after purchase -> the same USDT0 cover is now worth twice the FXRP.
+            const halvedXrpPrice = XRP_USD_PRICE_WEI / 2n;
+            await f.ftso.setPriceWei(await f.flightGuard.FXRP_PROXY_FEED_ID(), halvedXrpPrice);
+            const settlementTimeFxrp = expectedFxrpFor(COVER, halvedXrpPrice);
+            // ~2x, off by at most one base unit: each conversion truncates independently.
+            expect(settlementTimeFxrp - purchaseTimeFxrp * 2n).to.be.lessThanOrEqual(1n);
+            expect(settlementTimeFxrp).to.be.greaterThan(purchaseTimeFxrp);
+
+            await time.increaseTo(scheduledArrival);
+            const fxrpBefore = await f.fxrp.balanceOf(f.traveler.address);
+
+            await expect(f.flightGuard.settle(policyId, payoutProof()))
+                .to.emit(f.flightGuard, "PaidOutInFxrp")
+                .withArgs(policyId, f.traveler.address, COVER, settlementTimeFxrp, halvedXrpPrice, USDT_USD_PRICE_WEI);
+
+            expect(await f.fxrp.balanceOf(f.traveler.address)).to.equal(fxrpBefore + settlementTimeFxrp);
+        });
+
+        it("previewFxrpPayout quotes exactly what settle() pays at the same rate", async () => {
+            const f = await fundedFixture();
+            const { policyId, scheduledArrival } = await buyFxrpPayoutPolicy(f);
+
+            const [quotedFxrp, xrpUsdPriceWei, usdtUsdPriceWei] =
+                await f.flightGuard.previewFxrpPayout.staticCall(COVER);
+            expect(quotedFxrp).to.equal(expectedFxrpFor(COVER));
+            expect(xrpUsdPriceWei).to.equal(XRP_USD_PRICE_WEI);
+            expect(usdtUsdPriceWei).to.equal(USDT_USD_PRICE_WEI);
+
+            await time.increaseTo(scheduledArrival);
+            await expect(f.flightGuard.settle(policyId, payoutProof())).to.changeTokenBalance(
+                f.fxrp,
+                f.traveler,
+                quotedFxrp
+            );
+        });
+
+        // Backer solvency is the thing that must not move: an FXRP payout keeps the cover's
+        // USDT0 inside the contract, so poolBalance() has to net it out or backers would see
+        // a windfall that isn't theirs.
+        it("leaves the pool in exactly the state a USDT0 payout would have left it", async () => {
+            // Control run first, with its numbers captured as plain values: the second
+            // fundedFixture() reverts the chain to the fixture snapshot, so nothing can be
+            // read back off the first run afterwards.
+            const usdt0Run = await fundedFixture();
+            const usdt0Policy = await buyActivePolicy(usdt0Run.flightGuard, usdt0Run.traveler, COVER);
+            await time.increaseTo(usdt0Policy.scheduledArrival);
+            await usdt0Run.flightGuard.settle(usdt0Policy.policyId, payoutProof());
+            const control = {
+                poolBalance: await usdt0Run.flightGuard.poolBalance(),
+                freeLiquidity: await usdt0Run.flightGuard.freeLiquidity(),
+                totalLocked: await usdt0Run.flightGuard.totalLocked(),
+                totalShares: await usdt0Run.flightGuard.totalShares(),
+                contractUsdt0: await usdt0Run.token.balanceOf(await usdt0Run.flightGuard.getAddress()),
+            };
+
+            const fxrpRun = await fundedFixture();
+            const fxrpPolicy = await buyFxrpPayoutPolicy(fxrpRun);
+            await time.increaseTo(fxrpPolicy.scheduledArrival);
+            await fxrpRun.flightGuard.settle(fxrpPolicy.policyId, payoutProof());
+
+            expect(await fxrpRun.flightGuard.poolBalance()).to.equal(control.poolBalance);
+            expect(await fxrpRun.flightGuard.freeLiquidity()).to.equal(control.freeLiquidity);
+            expect(await fxrpRun.flightGuard.totalLocked()).to.equal(control.totalLocked);
+            expect(await fxrpRun.flightGuard.totalShares()).to.equal(control.totalShares);
+
+            // The contract still physically holds the cover's USDT0 in the FXRP run - it is
+            // just booked to the reserve provider rather than to the pool.
+            expect(await fxrpRun.token.balanceOf(await fxrpRun.flightGuard.getAddress())).to.equal(
+                control.contractUsdt0 + COVER
+            );
+        });
+
+        it("lets the backer withdraw their full share after an FXRP payout", async () => {
+            const f = await fundedFixture();
+            const { policyId, scheduledArrival } = await buyFxrpPayoutPolicy(f);
+            await time.increaseTo(scheduledArrival);
+            await f.flightGuard.settle(policyId, payoutProof());
+
+            const backerShares = await f.flightGuard.shares(f.backer.address);
+            const expectedUsdt0 =
+                (backerShares * (await f.flightGuard.poolBalance())) / (await f.flightGuard.totalShares());
+
+            await expect(f.flightGuard.connect(f.backer).withdraw(backerShares)).to.changeTokenBalance(
+                f.token,
+                f.backer,
+                expectedUsdt0
+            );
+            // Deposited 100, premium +4, cover -40 -> 64 back out.
+            expect(expectedUsdt0).to.equal(ethers.parseUnits("64", 6));
+        });
+
+        it("lets the reserve provider reclaim the swapped USDT0, and no more", async () => {
+            const f = await fundedFixture();
+            const { policyId, scheduledArrival } = await buyFxrpPayoutPolicy(f);
+            await time.increaseTo(scheduledArrival);
+            await f.flightGuard.settle(policyId, payoutProof());
+
+            await expect(
+                f.flightGuard.connect(f.owner).withdrawSwapProceeds(f.owner.address, COVER + 1n)
+            ).to.be.revertedWith("exceeds swap proceeds");
+
+            const poolBalanceBefore = await f.flightGuard.poolBalance();
+            await expect(
+                f.flightGuard.connect(f.owner).withdrawSwapProceeds(f.owner.address, COVER)
+            ).to.changeTokenBalance(f.token, f.owner, COVER);
+
+            expect(await f.flightGuard.usdt0SwapProceeds()).to.equal(0n);
+            // Claiming the proceeds never draws on backer funds - poolBalance() had already
+            // excluded them.
+            expect(await f.flightGuard.poolBalance()).to.equal(poolBalanceBefore);
+        });
+
+        it("is fully bidirectional: premium in FXRP and payout in FXRP on one policy", async () => {
+            const f = await fundedFixture();
+            const scheduledArrival = (await time.latest()) + 3600;
+            await f.flightGuard
+                .connect(f.traveler)
+                .buyCoverWithFXRP(
+                    COVER,
+                    FALLBACK_PREMIUM_BPS,
+                    scheduledArrival,
+                    computeRequestHash(),
+                    FLIGHT_REF,
+                    true
+                );
+            const policyId = (await f.flightGuard.policyCount()) - 1n;
+
+            const policy = await f.flightGuard.policies(policyId);
+            expect(policy.premiumInFxrp).to.equal(true);
+            expect(policy.payoutInFxrp).to.equal(true);
+
+            await time.increaseTo(scheduledArrival);
+            await expect(f.flightGuard.settle(policyId, payoutProof())).to.changeTokenBalance(
+                f.fxrp,
+                f.traveler,
+                expectedFxrpFor(COVER)
+            );
+        });
+
+        it("falls back to USDT0 when the reserve is short, without stranding the claim", async () => {
+            const f = await loadFixture(deployFixture);
+            await f.flightGuard.connect(f.backer).deposit(ethers.parseUnits("100", 6));
+            const shortReserve = expectedFxrpFor(COVER) - 1n; // one base unit too little
+            await f.flightGuard.connect(f.owner).fundFxrpPayoutReserve(shortReserve);
+
+            const { policyId, scheduledArrival } = await buyFxrpPayoutPolicy(f);
+            await time.increaseTo(scheduledArrival);
+
+            await expect(f.flightGuard.settle(policyId, payoutProof()))
+                .to.emit(f.flightGuard, "FxrpPayoutUnavailable")
+                .withArgs(policyId, expectedFxrpFor(COVER), shortReserve);
+
+            expect(await f.fxrp.balanceOf(f.traveler.address)).to.equal(ethers.parseUnits("1000", 6)); // untouched
+            expect(await f.flightGuard.fxrpPayoutReserve()).to.equal(shortReserve); // untouched
+            expect(await f.flightGuard.usdt0SwapProceeds()).to.equal(0n);
+            expect((await f.flightGuard.policies(policyId)).status).to.equal(1n); // PaidOut, in USDT0
+        });
+
+        it("falls back to USDT0 when the FTSO feed returns zero at settlement", async () => {
+            const f = await fundedFixture();
+            const { policyId, scheduledArrival } = await buyFxrpPayoutPolicy(f);
+            await f.ftso.setPriceWei(await f.flightGuard.FXRP_PROXY_FEED_ID(), 0n);
+            await time.increaseTo(scheduledArrival);
+
+            const usdt0Before = await f.token.balanceOf(f.traveler.address);
+            await expect(f.flightGuard.settle(policyId, payoutProof()))
+                .to.emit(f.flightGuard, "FxrpPayoutUnavailable")
+                .withArgs(policyId, 0n, RESERVE);
+
+            expect(await f.token.balanceOf(f.traveler.address)).to.equal(usdt0Before + COVER);
+            expect(await f.flightGuard.fxrpPayoutReserve()).to.equal(RESERVE);
+        });
+
+        it("falls back to USDT0 when the FTSO read itself reverts at settlement", async () => {
+            const f = await fundedFixture();
+            const { policyId, scheduledArrival } = await buyFxrpPayoutPolicy(f);
+            await f.ftso.setShouldRevert(true);
+            await time.increaseTo(scheduledArrival);
+
+            const usdt0Before = await f.token.balanceOf(f.traveler.address);
+            await expect(f.flightGuard.settle(policyId, payoutProof()))
+                .to.emit(f.flightGuard, "FxrpPayoutUnavailable")
+                .withArgs(policyId, 0n, RESERVE);
+
+            expect(await f.token.balanceOf(f.traveler.address)).to.equal(usdt0Before + COVER);
+            expect(await f.flightGuard.fxrpPayoutReserve()).to.equal(RESERVE);
+        });
+
+        it("touches neither reserve nor swap proceeds when the flight is on time", async () => {
+            const f = await fundedFixture();
+            const { policyId, scheduledArrival } = await buyFxrpPayoutPolicy(f);
+            await time.increaseTo(scheduledArrival);
+
+            await expect(
+                f.flightGuard.settle(policyId, buildProof({ flightStatus: "scheduled", delayMinutes: 0 }))
+            ).to.changeTokenBalance(f.fxrp, f.traveler, 0n);
+
+            expect((await f.flightGuard.policies(policyId)).status).to.equal(3n); // NoPayout
+            expect(await f.flightGuard.fxrpPayoutReserve()).to.equal(RESERVE);
+            expect(await f.flightGuard.usdt0SwapProceeds()).to.equal(0n);
+        });
+
+        describe("reserve administration", () => {
+            it("funds the reserve by pulling FXRP from the owner", async () => {
+                const f = await loadFixture(deployFixture);
+                const ownerFxrpBefore = await f.fxrp.balanceOf(f.owner.address);
+
+                await expect(f.flightGuard.connect(f.owner).fundFxrpPayoutReserve(RESERVE))
+                    .to.emit(f.flightGuard, "FxrpPayoutReserveFunded")
+                    .withArgs(f.owner.address, RESERVE, RESERVE);
+
+                expect(await f.fxrp.balanceOf(f.owner.address)).to.equal(ownerFxrpBefore - RESERVE);
+                expect(await f.flightGuard.fxrpPayoutReserve()).to.equal(RESERVE);
+            });
+
+            it("recycles FXRP premiums into the reserve without moving tokens", async () => {
+                const f = await fundedFixture();
+                const scheduledArrival = (await time.latest()) + 3600;
+                await f.flightGuard
+                    .connect(f.traveler)
+                    .buyCoverWithFXRP(
+                        COVER,
+                        FALLBACK_PREMIUM_BPS,
+                        scheduledArrival,
+                        computeRequestHash(),
+                        FLIGHT_REF,
+                        false
+                    );
+                const premiums = await f.flightGuard.fxrpPremiums();
+                expect(premiums).to.be.greaterThan(0n);
+
+                await expect(f.flightGuard.connect(f.owner).moveFxrpPremiumsToReserve(premiums)).to.changeTokenBalance(
+                    f.fxrp,
+                    await f.flightGuard.getAddress(),
+                    0n
+                );
+
+                expect(await f.flightGuard.fxrpPremiums()).to.equal(0n);
+                expect(await f.flightGuard.fxrpPayoutReserve()).to.equal(RESERVE + premiums);
+            });
+
+            it("withdraws from the reserve, bounded by its balance", async () => {
+                const f = await fundedFixture();
+                await expect(
+                    f.flightGuard.connect(f.owner).withdrawFxrpPayoutReserve(f.owner.address, RESERVE + 1n)
+                ).to.be.revertedWith("exceeds reserve");
+
+                await expect(
+                    f.flightGuard.connect(f.owner).withdrawFxrpPayoutReserve(f.owner.address, RESERVE)
+                ).to.changeTokenBalance(f.fxrp, f.owner, RESERVE);
+                expect(await f.flightGuard.fxrpPayoutReserve()).to.equal(0n);
+            });
+
+            it("restricts every reserve function to the owner", async () => {
+                const f = await fundedFixture();
+                await expect(f.flightGuard.connect(f.other).fundFxrpPayoutReserve(1n)).to.be.revertedWith("not owner");
+                await expect(
+                    f.flightGuard.connect(f.other).withdrawFxrpPayoutReserve(f.other.address, 1n)
+                ).to.be.revertedWith("not owner");
+                await expect(f.flightGuard.connect(f.other).moveFxrpPremiumsToReserve(0n)).to.be.revertedWith(
+                    "not owner"
+                );
+                await expect(
+                    f.flightGuard.connect(f.other).withdrawSwapProceeds(f.other.address, 0n)
+                ).to.be.revertedWith("not owner");
+            });
         });
     });
 
@@ -656,6 +1057,29 @@ describe("FlightGuard", () => {
 
             const policy = await flightGuard.policies(policyId);
             expect(policy.status).to.equal(1n); // PaidOut
+        });
+
+        // Regression guard for the default path: adding the FXRP payout option must not
+        // change what a normal policy does, even on a contract that has FXRP sitting in its
+        // payout reserve ready to be spent.
+        it("pays USDT0 and leaves the FXRP reserve alone when payoutInFxrp is false", async () => {
+            const { flightGuard, token, fxrp, owner, backer, traveler } = await loadFixture(deployFixture);
+            await flightGuard.connect(backer).deposit(ethers.parseUnits("100", 6));
+            const reserve = ethers.parseUnits("500", 6);
+            await flightGuard.connect(owner).fundFxrpPayoutReserve(reserve);
+
+            const { policyId, scheduledArrival, coverAmount } = await buyActivePolicy(flightGuard, traveler);
+            await time.increaseTo(scheduledArrival);
+            const travelerFxrpBefore = await fxrp.balanceOf(traveler.address);
+
+            await expect(
+                flightGuard.settle(policyId, buildProof({ flightStatus: "cancelled", delayMinutes: 0 }))
+            ).to.changeTokenBalance(token, traveler, coverAmount);
+
+            expect(await fxrp.balanceOf(traveler.address)).to.equal(travelerFxrpBefore);
+            expect(await flightGuard.fxrpPayoutReserve()).to.equal(reserve);
+            expect(await flightGuard.usdt0SwapProceeds()).to.equal(0n);
+            expect(await flightGuard.poolBalance()).to.equal(await token.balanceOf(await flightGuard.getAddress()));
         });
 
         it("does not pay out for an on-time, non-cancelled flight", async () => {
@@ -744,25 +1168,162 @@ describe("FlightGuard", () => {
         });
     });
 
-    describe("real DA layer proof bytes (Coston2 live run regression)", () => {
+    describe("pre-provenance proof bytes (Coston2 live run regression)", () => {
         // Exact abiEncodedData captured from a live Coston2 Web2Json attestation (voting
-        // round 1391457, 2026-07-10): {flightStatus: "scheduled", delayMinutes: 0}, ABI
-        // encoded as the single wrapped "dto" tuple abiSignature actually declares. Before
-        // the fix, FlightGuard decoded this flat as (string, uint256) and read delayMinutes
-        // as 64 (garbage - actually the inner tuple's string-offset word).
-        const REAL_ABI_ENCODED_DATA =
+        // round 1391457, 2026-07-10) under the OLD two-field scheme:
+        // {flightStatus: "scheduled", delayMinutes: 0}, ABI encoded as the single wrapped
+        // "dto" tuple that abiSignature declared at the time.
+        const PRE_PROVENANCE_ABI_ENCODED_DATA =
             "0x00000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000000040000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000097363686564756c65640000000000000000000000000000000000000000000000";
 
-        it("decodes real captured bytes as FlightDto (delayMinutes: 0, not the old garbage 64)", async () => {
+        // The DTO gained `source`/`corroborated`, so these bytes are two words short of the
+        // current struct. This asserts the safe outcome: abi.decode reverts on bounds rather
+        // than reading past the payload and inventing a source/corroboration that was never
+        // attested. A policy carrying a pre-provenance requestHash therefore cannot settle at
+        // all on this contract (it expires and unlocks) - which is why the keeper skips those
+        // schemes explicitly instead of paying for an attestation that can never land.
+        it("rejects two-field bytes rather than misreading them as provenance fields", async () => {
             const { flightGuard, backer, traveler } = await loadFixture(deployFixture);
             await flightGuard.connect(backer).deposit(ethers.parseUnits("100", 6));
             const { policyId, scheduledArrival } = await buyActivePolicy(flightGuard, traveler);
             await time.increaseTo(scheduledArrival);
 
-            const proof = buildProof({ abiEncodedData: REAL_ABI_ENCODED_DATA });
-            await expect(flightGuard.settle(policyId, proof))
-                .to.emit(flightGuard, "Settled")
-                .withArgs(policyId, 3n, 0n, false); // NoPayout, delayMinutes: 0, cancelled: false
+            const proof = buildProof({ abiEncodedData: PRE_PROVENANCE_ABI_ENCODED_DATA });
+            await expect(flightGuard.settle(policyId, proof)).to.be.reverted;
+
+            // Untouched: still Active, still locked, still settleable by a valid proof.
+            expect((await flightGuard.policies(policyId)).status).to.equal(0n);
+            expect(await flightGuard.totalLocked()).to.equal(ethers.parseUnits("40", 6));
+        });
+    });
+
+    describe("settlement provenance (single-source auditability)", () => {
+        async function settledWith(overrides: Parameters<typeof buildProof>[0]) {
+            const f = await loadFixture(deployFixture);
+            await f.flightGuard.connect(f.backer).deposit(ethers.parseUnits("100", 6));
+            const { policyId, scheduledArrival, coverAmount } = await buyActivePolicy(f.flightGuard, f.traveler);
+            await time.increaseTo(scheduledArrival);
+            const tx = await f.flightGuard.settle(policyId, buildProof(overrides));
+            return { ...f, policyId, coverAmount, tx };
+        }
+
+        it("records a corroborated payout as Corroborated and emits the source", async () => {
+            const { flightGuard, policyId, tx } = await settledWith({
+                flightStatus: "cancelled",
+                source: "airlabs",
+                corroborated: true,
+            });
+
+            await expect(tx)
+                .to.emit(flightGuard, "SettlementEvidence")
+                .withArgs(policyId, Provenance.Corroborated, "airlabs");
+            expect((await flightGuard.policies(policyId)).provenance).to.equal(Provenance.Corroborated);
+        });
+
+        it("records an uncorroborated payout as SingleSource", async () => {
+            const { flightGuard, policyId, tx } = await settledWith({
+                flightStatus: "active",
+                delayMinutes: 300,
+                source: "airlabs",
+                corroborated: false,
+            });
+
+            await expect(tx)
+                .to.emit(flightGuard, "SettlementEvidence")
+                .withArgs(policyId, Provenance.SingleSource, "airlabs");
+            expect((await flightGuard.policies(policyId)).provenance).to.equal(Provenance.SingleSource);
+            expect((await flightGuard.policies(policyId)).status).to.equal(1n); // still PaidOut
+        });
+
+        it("names the fallback source when it was the one that answered", async () => {
+            const { flightGuard, policyId, tx } = await settledWith({
+                flightStatus: "cancelled",
+                source: "aviationstack",
+                corroborated: false,
+            });
+
+            await expect(tx)
+                .to.emit(flightGuard, "SettlementEvidence")
+                .withArgs(policyId, Provenance.SingleSource, "aviationstack");
+        });
+
+        // The whole point of the flag: before it, these two settled identically and were
+        // indistinguishable onchain, so a data outage silently looked like a fine flight.
+        it("distinguishes a data outage from a genuinely on-time flight", async () => {
+            const outage = await settledWith({ flightStatus: "EMPTY", delayMinutes: 0, source: "none" });
+            expect((await outage.flightGuard.policies(outage.policyId)).status).to.equal(3n); // NoPayout
+            expect((await outage.flightGuard.policies(outage.policyId)).provenance).to.equal(
+                Provenance.DataUnavailable
+            );
+            await expect(outage.tx)
+                .to.emit(outage.flightGuard, "SettlementEvidence")
+                .withArgs(outage.policyId, Provenance.DataUnavailable, "none");
+
+            const onTime = await settledWith({ flightStatus: "landed", delayMinutes: 12, source: "airlabs" });
+            expect((await onTime.flightGuard.policies(onTime.policyId)).status).to.equal(3n); // NoPayout too...
+            // ...but no longer indistinguishable.
+            expect((await onTime.flightGuard.policies(onTime.policyId)).provenance).to.equal(Provenance.SingleSource);
+        });
+
+        it("treats a corroborated on-time flight as corroborated, not as missing data", async () => {
+            const { flightGuard, policyId } = await settledWith({
+                flightStatus: "landed",
+                delayMinutes: 0,
+                source: "airlabs",
+                corroborated: true,
+            });
+            expect((await flightGuard.policies(policyId)).provenance).to.equal(Provenance.Corroborated);
+        });
+
+        it("never pays out on EMPTY, however the corroboration flag is set", async () => {
+            // A source claiming corroboration cannot turn missing data into a payout - the
+            // payout conditions are unchanged and EMPTY satisfies neither.
+            const { flightGuard, token, traveler, policyId, coverAmount, tx } = await settledWith({
+                flightStatus: "EMPTY",
+                delayMinutes: 0,
+                source: "none",
+                corroborated: true,
+            });
+            await expect(tx).to.changeTokenBalance(token, traveler, 0n);
+            expect((await flightGuard.policies(policyId)).status).to.equal(3n); // NoPayout
+            expect((await flightGuard.policies(policyId)).provenance).to.equal(Provenance.DataUnavailable);
+            expect(coverAmount).to.be.greaterThan(0n);
+        });
+
+        it("leaves provenance Unsettled on an active policy and on expiry", async () => {
+            const { flightGuard, backer, traveler } = await loadFixture(deployFixture);
+            await flightGuard.connect(backer).deposit(ethers.parseUnits("100", 6));
+            const { policyId, scheduledArrival } = await buyActivePolicy(flightGuard, traveler);
+            expect((await flightGuard.policies(policyId)).provenance).to.equal(Provenance.Unsettled);
+
+            const claimWindow = await flightGuard.CLAIM_WINDOW();
+            await time.increaseTo(scheduledArrival + Number(claimWindow) + 1);
+            await flightGuard.expire(policyId);
+
+            expect((await flightGuard.policies(policyId)).status).to.equal(2n); // Expired
+            expect((await flightGuard.policies(policyId)).provenance).to.equal(Provenance.Unsettled);
+        });
+
+        it("records provenance on an FXRP payout too", async () => {
+            const { flightGuard, owner, backer, traveler, fxrp } = await loadFixture(deployFixture);
+            await flightGuard.connect(backer).deposit(ethers.parseUnits("100", 6));
+            await flightGuard.connect(owner).fundFxrpPayoutReserve(ethers.parseUnits("500", 6));
+            const coverAmount = ethers.parseUnits("40", 6);
+            const scheduledArrival = (await time.latest()) + 3600;
+            await flightGuard
+                .connect(traveler)
+                .buyCover(coverAmount, FALLBACK_PREMIUM_BPS, scheduledArrival, computeRequestHash(), FLIGHT_REF, true);
+            const policyId = (await flightGuard.policyCount()) - 1n;
+            await time.increaseTo(scheduledArrival);
+
+            await expect(
+                flightGuard.settle(
+                    policyId,
+                    buildProof({ flightStatus: "cancelled", source: "aviationstack", corroborated: true })
+                )
+            ).to.changeTokenBalance(fxrp, traveler, expectedFxrpFor(coverAmount));
+
+            expect((await flightGuard.policies(policyId)).provenance).to.equal(Provenance.Corroborated);
         });
     });
 

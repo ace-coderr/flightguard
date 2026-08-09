@@ -6,12 +6,20 @@ pragma solidity ^0.8.20;
 /// actually calls (18-decimal-normalized value + timestamp).
 contract MockFtsoV2 {
     mapping(bytes21 => uint256) public pricesWei;
+    /// Simulates an oracle read that reverts outright (rather than returning a zero price),
+    /// so the settlement-time payout path can be tested against a genuinely failing feed.
+    bool public shouldRevert;
 
     function setPriceWei(bytes21 feedId, uint256 priceWei) external {
         pricesWei[feedId] = priceWei;
     }
 
+    function setShouldRevert(bool value) external {
+        shouldRevert = value;
+    }
+
     function getFeedByIdInWei(bytes21 feedId) external view returns (uint256 _value, uint64 _timestamp) {
+        require(!shouldRevert, "MockFtsoV2: feed unavailable");
         return (pricesWei[feedId], uint64(block.timestamp));
     }
 }
