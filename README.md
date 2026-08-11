@@ -9,13 +9,12 @@ FlightGuard is **bidirectional with FXRP**: FXRP goes in as premium and comes ou
 - **Live app:** https://flightguard.vercel.app
 - **Repo:** https://github.com/ace-coderr/flightguard
 - **Network:** Flare Testnet Coston2 (chain ID 114)
-- **Demo video:** _[link — coming]_
 
 ---
 
-## Updates since the demo video
+## Recent upgrades
 
-The video predates two upgrades. Both are live on the current deployment
+Two upgrades landed after the core build. Both are live on the current deployment
 [`0x374F52c6…5fc3`](https://coston2-explorer.flare.network/address/0x374F52c6cbe43f092453e95E4580016aD9ff5fc3) and proven onchain.
 
 **1. Bidirectional FXRP.** FXRP is now a first-class asset in _both_ directions: pay the premium in it, receive the payout in it, chosen independently — so all four combinations are valid. The payout is not fixed at purchase; `settle()` converts the USDT0 cover at the **live FTSO rate read inside the settlement transaction itself**, so the traveler receives the XRP-denominated value of their cover as of the moment the claim is paid.
