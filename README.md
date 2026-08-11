@@ -13,6 +13,29 @@ FlightGuard is **bidirectional with FXRP**: FXRP goes in as premium and comes ou
 
 ---
 
+## Updates since the demo video
+
+The video predates two upgrades. Both are live on the current deployment
+[`0x374F52c6…5fc3`](https://coston2-explorer.flare.network/address/0x374F52c6cbe43f092453e95E4580016aD9ff5fc3) and proven onchain.
+
+**1. Bidirectional FXRP.** FXRP is now a first-class asset in _both_ directions: pay the premium in it, receive the payout in it, chosen independently — so all four combinations are valid. The payout is not fixed at purchase; `settle()` converts the USDT0 cover at the **live FTSO rate read inside the settlement transaction itself**, so the traveler receives the XRP-denominated value of their cover as of the moment the claim is paid.
+
+> Proof — flight **AF5694**, landed **620 minutes** late, **1.927243 FXRP** delivered to the traveler and **0 USDT0**:
+> [`0xca60eeab…fa4e`](https://coston2-explorer.flare.network/tx/0xca60eeabc2bedfda07bbba4e204992b300bd98348624ba56217959c166acfa4e)
+
+The pool stays USDT0-only, so backer solvency and share pricing are untouched — see [Bidirectional FXRP](#bidirectional-fxrp) for how that swap is funded and the tradeoff it carries.
+
+**2. Settlement provenance.** This fixes a real bug. When the flight API had no usable record, the attested status resolved to `EMPTY`, which failed both payout conditions and settled as a bare `NoPayout` — **indistinguishable onchain from a flight that simply arrived on time**. A traveler whose claim was denied by a data gap had no way to tell, and neither did anyone auditing the contract.
+
+Every settlement now records how well-evidenced it was — `SingleSource`, `Corroborated`, or `DataUnavailable` — as `Policy.provenance` and via a `SettlementEvidence` event with `provenance` **indexed**, so the whole history can be filtered for uncorroborated or data-starved settlements. The `source` and `corroborated` fields travel inside the attested payload, so they are covered by the FDC proof rather than asserted by our server afterwards.
+
+> Proof — a real data gap: flight **SQ23** had already rolled out of the upstream's record by settlement time, so the claim settled `NoPayout` and said exactly why:
+> [`0x06f9a8f0…3ade`](https://coston2-explorer.flare.network/tx/0x06f9a8f08d3e043af8043b41b0a0500626d6bc642c9c50348d425bdc982a3ade)
+
+Alongside it, settlement data now falls back to a second source when the primary has no record — inside the one attested request, since jq cannot make HTTP calls. What that does and does not buy is documented honestly in [Data sources, and the single-source risk](#data-sources-and-the-single-source-risk).
+
+---
+
 ## Bounty
 
 **Bounty 1 — Interoperable Asset Products.**
@@ -253,9 +276,19 @@ Note: settlement runs against the **live FDC verifier** — a real attestation t
 
 The attested DTO came back `flightStatus: "EMPTY", delayMinutes: 0, source: "none", corroborated: false`, and `SettlementEvidence(policyId, 3, "none")` was emitted. The reason is worth stating exactly: the deployed proxy at the time of the run predates the multi-source resolver, so it returned no `.resolved` block, every jq field fell through to its safe default, and the contract settled on absence of data. **A genuinely delayed flight was denied because of a data gap — and that is now visible onchain instead of being indistinguishable from an on-time arrival.** It also demonstrates the degradation property end to end: a stale or broken data path can only ever produce "no data", never a spurious payout.
 
-Once the app is deployed with the resolver, the same flight and date settles `PaidOut` with `provenance = SingleSource, source = "airlabs"` — `scripts/flightguard/checkFlightSources.ts` already resolves it that way against the live upstream.
+That first one was self-inflicted — the contract shipped ahead of the app. Here is the same flag firing on an **organic** data gap, with the resolver fully deployed: flight **SQ23** had simply rolled out of the upstream's record by the time it was settled, since the free tier only exposes a flight's most recent instance.
 
-**FXRP payout, proven live end-to-end** (previous deployment [`0x92619A66…5b1B`](https://coston2-explorer.flare.network/address/0x92619A6687681CF59E9f6896b656Ac30b9f25b1B), before the provenance redeploy; the FXRP payout path is unchanged since). One run of `scripts/flightguard/fxrpPayoutE2E.ts`: it picked a real flight off the live delay feed — **OH5026**, landed **942 minutes** late — bought cover on it with `payoutInFxrp = true`, ran the full FDC attestation cycle, and settled:
+- **`settle()` → NoPayout, `DataUnavailable`, organic outage**: [`0x06f9a8f0…3ade`](https://coston2-explorer.flare.network/tx/0x06f9a8f08d3e043af8043b41b0a0500626d6bc642c9c50348d425bdc982a3ade)
+
+Both are the honest outcome: no source could say what happened to the flight, so nothing was paid — and the contract records _that_, rather than letting it read as a confirmed on-time arrival.
+
+**FXRP payout on the current deployment** (`0x374F52c6…5fc3`). `scripts/flightguard/fxrpPayoutE2E.ts` picked flight **AF5694** off the live delay feed — landed **620 minutes** late — bought cover with `payoutInFxrp = true`, ran the full FDC attestation cycle, and settled:
+
+- **`settle()` → PAID OUT IN FXRP** — **1.927243 FXRP** delivered, **0 USDT0**, at XRP/USD **$1.037023** read inside that transaction: [`0xca60eeab…fa4e`](https://coston2-explorer.flare.network/tx/0xca60eeabc2bedfda07bbba4e204992b300bd98348624ba56217959c166acfa4e)
+
+The same policy also carries `provenance = SingleSource, source = "airlabs"` — one settlement demonstrating both upgrades at once. A second FXRP payout, run manually against an existing policy with `scripts/flightguard/settlePolicy.ts`, paid **1.928902 FXRP** on flight **U6322** (landed 573 min late): [`0xd19cc8e6…075e`](https://coston2-explorer.flare.network/tx/0xd19cc8e6088f48e3c41f9f4bcc47ff121ff55d74bd18bccd79b07d3bcd5f075e)
+
+**The first FXRP payout** ran earlier on the [superseded deployment](https://coston2-explorer.flare.network/address/0x92619A6687681CF59E9f6896b656Ac30b9f25b1B) (`0x92619A66…5b1B`), before the provenance redeploy; the FXRP payout path is unchanged since. It picked **OH5026**, landed **942 minutes** late, bought cover with `payoutInFxrp = true`, and settled:
 
 - `buyCover(..., payoutInFxrp: true)` — 2 USDT0 of cover, policy stores `payoutInFxrp = true`: [`0x56c78f23…1f53d`](https://coston2-explorer.flare.network/tx/0x56c78f23cfdcc71bbd930a949ea6f251f4be2ff7de5a72b78c55e6ac6751f53d)
 - **`settle()` → PAID OUT IN FXRP** — real FDC proof (`flightStatus: landed`, `delayMinutes: 942`), real FTSO read inside the settlement tx, **1.918053 FXRP** delivered to the traveler's wallet and **0 USDT0**: [`0xa6ebe8e2…7a9c`](https://coston2-explorer.flare.network/tx/0xa6ebe8e2c480d0baf71d6018340a3decd2ae4db6e8d21c82aeaca715bed37a9c)
